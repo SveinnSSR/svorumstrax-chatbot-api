@@ -1,26 +1,30 @@
-// Enhanced Svörum strax Chatbot API with Analytics Integration
 import dotenv from "dotenv";
 dotenv.config();
 
-// Core dependencies
 import express from "express";
 import cors from "cors";
-import rateLimit from "express-rate-limit";
 import OpenAI from "openai";
-import { v4 as uuidv4 } from "uuid";
 import Pusher from "pusher";
 
-// Analytics Integration Imports
+// Import the analytics modules (same as ELKO/Sky Lagoon)
 import { connectToDatabase } from "../database.js";
-import { processMessagePair } from "../messageProcessor.js";
 import { getOrCreateSession } from "../sessionManager.js";
+import { processMessagePair } from "../messageProcessor.js";
 
-console.log("🚀 SVÖRUM STRAX SERVER STARTING - " + new Date().toISOString());
-console.log("Environment check - NODE_ENV:", process.env.NODE_ENV);
-console.log("MONGODB_URI exists:", !!process.env.MONGODB_URI);
-console.log("ANALYTICS_API_KEY exists:", !!process.env.ANALYTICS_API_KEY);
+// Configuration
+const PORT = process.env.PORT || 8080;
+const API_KEY = process.env.API_KEY || "svorum2025_sk3j8k4j5k6j7k8j9k0j1k2";
 
-// Initialize Pusher with your credentials
+// Initialize Express
+const app = express();
+app.set("trust proxy", 1);
+
+// Initialize OpenAI
+const openai = new OpenAI({
+  apiKey: process.env.OPENAI_API_KEY,
+});
+
+// Initialize Pusher (same as ELKO/Sky Lagoon)
 const pusher = new Pusher({
   appId: process.env.PUSHER_APP_ID,
   key: process.env.PUSHER_KEY,
@@ -29,7 +33,7 @@ const pusher = new Pusher({
   useTLS: true,
 });
 
-// Enhanced broadcastConversation function that integrates with analytics
+// Broadcast conversation function (same pattern as ELKO/Sky Lagoon)
 const broadcastConversation = async (
   userMessage,
   botResponse,
@@ -52,74 +56,56 @@ const broadcastConversation = async (
       language: language,
       topic: topic,
       type: type,
-      clientId: "svorum-strax", // Set to Svörum strax client ID
+      clientId: "svorum-strax", // IMPORTANT: This identifies Svörum strax conversations
       status: status,
     });
 
     // Check if processing was successful
     if (processResult.success) {
-      // Handle Pusher broadcasting for real-time updates
-      try {
-        const sessionInfo = await getOrCreateSession(clientSessionId);
+      // Get session info
+      const sessionInfo = await getOrCreateSession(clientSessionId);
 
-        // Create minimal conversation data for Pusher
-        const conversationData = {
-          id: sessionInfo.conversationId,
-          sessionId: sessionInfo.sessionId,
-          clientId: "svorum-strax",
-          userMessage: userMessage,
-          botResponse: botResponse,
-          messages: [
-            {
-              id: processResult.userMessageId,
-              content: userMessage,
-              role: "user",
-              type: "user",
-            },
-            {
-              id: processResult.botMessageId,
-              content: botResponse,
-              role: "assistant",
-              type: "bot",
-            },
-          ],
-          startedAt: sessionInfo.startedAt,
-          endedAt: new Date().toISOString(),
-          language: language,
-          topic: topic,
-        };
+      // Create conversation data for Pusher
+      const conversationData = {
+        id: sessionInfo.conversationId,
+        sessionId: sessionInfo.sessionId,
+        clientId: "svorum-strax",
+        userMessage: userMessage,
+        botResponse: botResponse,
+        messages: [
+          {
+            id: processResult.userMessageId,
+            content: userMessage,
+            role: "user",
+            type: "user",
+          },
+          {
+            id: processResult.botMessageId,
+            content: botResponse,
+            role: "assistant",
+            type: "bot",
+          },
+        ],
+        startedAt: sessionInfo.startedAt,
+        endedAt: new Date().toISOString(),
+        language: language,
+        topic: topic,
+      };
 
-        // Pusher broadcast
-        await pusher.trigger(
-          "chat-channel",
-          "conversation-update",
-          conversationData,
-        );
-        console.log("✅ Pusher broadcast sent successfully");
-      } catch (pusherError) {
-        console.error("Pusher error:", pusherError.message);
-        // Continue even if Pusher fails - critical data is already saved
-      }
+      // Broadcast via Pusher (use svorum-strax channel)
+      await pusher.trigger(
+        "svorum-strax-chat-channel",
+        "conversation-update",
+        conversationData,
+      );
 
       return {
         success: true,
         postgresqlId: processResult.postgresqlId,
       };
-    } else if (processResult.error === "duplicate_message") {
-      return {
-        success: true,
-        postgresqlId: null,
-        deduplicated: true,
-      };
     } else {
-      console.log(
-        "Message processor error:",
-        processResult.error,
-        processResult.reason,
-      );
       return {
         success: false,
-        postgresqlId: null,
         error: processResult.error || "processing_error",
       };
     }
@@ -129,45 +115,77 @@ const broadcastConversation = async (
   }
 };
 
-// Configuration
-const config = {
-  PORT: process.env.PORT || "8080",
-  OPENAI_API_KEY: process.env.OPENAI_API_KEY,
-  API_KEY: process.env.API_KEY,
-};
-
-// Initialize Express
-const app = express();
-app.set("trust proxy", 1);
-
-// Initialize OpenAI
-const openai = new OpenAI({
-  apiKey: config.OPENAI_API_KEY,
-});
-
-// CORS Configuration - Enhanced for analytics integration
+// CORS - Simple setup (same as ELKO)
 const corsOptions = {
   origin: [
     "http://localhost:3000",
-    "http://localhost:8000",
     "http://localhost:8080",
     "https://svorumstrax-website.vercel.app",
     "https://svorumstrax.is",
-    "https://hysing.svorumstrax.is", // Analytics dashboard
+    "https://hysing.svorumstrax.is",
   ],
-  methods: ["GET", "POST", "OPTIONS", "HEAD"],
-  allowedHeaders: ["Content-Type", "x-api-key", "Authorization"],
+  methods: ["GET", "POST", "OPTIONS"],
+  allowedHeaders: ["Content-Type", "x-api-key"],
   credentials: true,
 };
 
-// Rate limiter
-const limiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 100, // limit each IP to 100 requests per windowMs
-  message: { error: "Too many requests. Please try again later." },
+// Middleware
+app.use(cors(corsOptions));
+app.use(express.json());
+
+// Simple session storage (same as ELKO)
+const sessions = new Map();
+
+// Response cache for speed optimization
+const responseCache = new Map();
+
+// API Key verification (same as ELKO)
+const verifyApiKey = (req, res, next) => {
+  const apiKey = req.header("x-api-key");
+
+  if (!apiKey || apiKey !== API_KEY) {
+    return res.status(401).json({ error: "Unauthorized" });
+  }
+  next();
+};
+
+// Health check
+app.get("/", (_req, res) => {
+  res.json({
+    status: "OK",
+    service: "Svörum strax AI Backend",
+    timestamp: new Date().toISOString(),
+  });
 });
 
-// System prompt for Svörum strax chatbot
+// MongoDB test endpoint (same as ELKO)
+app.get("/mongo-test", async (_req, res) => {
+  try {
+    console.log("MongoDB test endpoint accessed");
+    const { db } = await connectToDatabase();
+
+    // Check if connection works
+    const collections = await db.listCollections().toArray();
+    const collectionNames = collections.map((c) => c.name);
+
+    res.status(200).json({
+      success: true,
+      message: "MongoDB connected successfully",
+      collections: collectionNames,
+      clientId: "svorum-strax",
+      timestamp: new Date().toISOString(),
+    });
+  } catch (error) {
+    console.error("MongoDB test endpoint error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to connect to MongoDB",
+      error: error.message,
+    });
+  }
+});
+
+// System prompt for Svörum strax
 const SYSTEM_PROMPT = `You are a helpful AI assistant for Svörum strax, an Icelandic customer service outsourcing company based in Barcelona, Spain. You should be friendly, professional, and knowledgeable about all aspects of the company.
 
 COMPANY INFORMATION:
@@ -265,236 +283,175 @@ When answering questions:
 - Use a warm, professional tone
 - Answer in the same language as the question (Icelandic or English)`;
 
-// API Key verification middleware
-const verifyApiKey = (req, res, next) => {
-  const apiKey = req.header("x-api-key");
-  console.log("\n🔑 API Key Check:", {
-    receivedKey: apiKey,
-    configuredKey: process.env.API_KEY,
-    matches: apiKey === process.env.API_KEY,
-  });
+// OPTIMIZED CHAT ENDPOINT - Speed optimized like Sky Lagoon and ELKO
+app.post("/chat", verifyApiKey, async (req, res) => {
+  const startTime = Date.now();
 
-  if (!apiKey || apiKey !== process.env.API_KEY) {
-    console.error("❌ Invalid or missing API key");
-    return res.status(401).json({ error: "Unauthorized request" });
-  }
-  next();
-};
-
-// Middleware
-app.use(cors(corsOptions));
-app.use(limiter);
-app.use(express.json());
-
-// Add request logging middleware
-app.use((req, res, next) => {
-  console.log(`⚡ REQUEST: ${req.method} ${req.path}`);
-  next();
-});
-
-// Health check endpoint
-app.get("/", (req, res) => {
-  res.json({
-    status: "OK",
-    service: "Svörum strax Chatbot API",
-    timestamp: new Date().toISOString(),
-    config: {
-      openaiConfigured: !!config.OPENAI_API_KEY,
-      apiKeyConfigured: !!config.API_KEY,
-      mongodbConfigured: !!process.env.MONGODB_URI,
-      analyticsEnabled: true,
-    },
-  });
-});
-
-// MongoDB test endpoint
-app.get("/mongo-test", async (req, res) => {
   try {
-    console.log("MongoDB test endpoint accessed");
-    const { db } = await connectToDatabase();
+    const { message, sessionId } = req.body;
 
-    // Check if connection works by listing collections
-    const collections = await db.listCollections().toArray();
-    const collectionNames = collections.map((c) => c.name);
+    console.log("📥 Message:", message);
+    console.log("🔑 Session:", sessionId);
 
-    res.status(200).json({
-      success: true,
-      message: "MongoDB connected successfully",
-      collections: collectionNames,
-      timestamp: new Date().toISOString(),
+    // OPTIMIZATION 1: Early cache check (like ELKO and Sky Lagoon)
+    const detectedLanguage = message.match(/[áéíóúýþæðöÁÉÍÓÚÝÞÆÐÖ]/i) ? "is" : "en";
+    const cacheKey = `${sessionId}:${message.toLowerCase().trim()}:${detectedLanguage}`;
+    const cached = responseCache.get(cacheKey);
+
+    if (cached && Date.now() - cached.timestamp < 3600000) {
+      // 1 hour cache (can be extended for production)
+      console.log("📦 Using cached response");
+      const totalTime = Date.now() - startTime;
+      console.log(`⏱️ Response time (cached): ${totalTime}ms`);
+      return res.json(cached.response);
+    }
+
+    console.log("🌐 Language detected:", detectedLanguage);
+
+    // OPTIMIZATION 2: Get session info early
+    const sessionInfo = await getOrCreateSession(sessionId);
+    console.log("📊 Using conversation ID:", sessionInfo.conversationId);
+
+    // Get or create local session for chat history
+    if (!sessions.has(sessionId)) {
+      sessions.set(sessionId, {
+        messages: [],
+        createdAt: new Date(),
+      });
+    }
+    const session = sessions.get(sessionId);
+
+    // Add user message to session
+    session.messages.push({
+      role: "user",
+      content: message,
     });
+
+    // Keep only last 10 messages
+    if (session.messages.length > 10) {
+      session.messages = session.messages.slice(-10);
+    }
+
+    // Prepare messages for OpenAI
+    const messages = [
+      {
+        role: "system",
+        content: SYSTEM_PROMPT,
+      },
+      ...session.messages,
+    ];
+
+    // Call OpenAI
+    const completion = await openai.chat.completions.create({
+      model: "gpt-4o",
+      messages: messages,
+      temperature: 0.7,
+      max_tokens: 500,
+    });
+
+    const response = completion.choices[0].message.content;
+
+    // Add assistant response to session
+    session.messages.push({
+      role: "assistant",
+      content: response,
+    });
+
+    // Simple topic detection
+    const detectedTopic = /\b(job|work|employment|störf|vinna)\b/i.test(message)
+      ? "employment"
+      : /\b(service|þjónusta|símsvörun|tölvupóstur)\b/i.test(message)
+        ? "services"
+        : /\b(price|verð|cost|kostnaður)\b/i.test(message)
+          ? "pricing"
+          : /\b(contact|tengiliður|information|upplýsingar)\b/i.test(message)
+            ? "contact"
+            : "general";
+
+    // OPTIMIZATION 3: Prepare response data
+    const responseData = {
+      message: response,
+      sessionId: sessionId,
+      postgresqlMessageId: null, // Will be updated asynchronously if needed
+      language: {
+        detected: detectedLanguage,
+        isIcelandic: detectedLanguage === "is"
+      },
+      topic: detectedTopic
+    };
+
+    // OPTIMIZATION 4: Cache the response
+    responseCache.set(cacheKey, {
+      response: responseData,
+      timestamp: Date.now(),
+    });
+
+    // OPTIMIZATION 5: Performance logging (like Sky Lagoon and ELKO)
+    const totalTime = Date.now() - startTime;
+    console.log(`⏱️ Response time: ${totalTime}ms`);
+
+    // OPTIMIZATION 6: Send response immediately (FIRE-AND-FORGET ANALYTICS)
+    res.json(responseData);
+
+    // FIRE-AND-FORGET: Analytics happen in background - DON'T WAIT!
+    // This is the KEY optimization that makes it fast like Sky Lagoon and ELKO
+    setImmediate(async () => {
+      try {
+        console.log("📨 Broadcasting response in background for session:", sessionId);
+        
+        const broadcastResult = await broadcastConversation(
+          message,
+          response,
+          detectedLanguage,
+          detectedTopic,
+          "chat",
+          sessionId,
+          "active"
+        );
+
+        // Update cache with PostgreSQL ID if available (for feedback functionality)
+        if (broadcastResult.postgresqlId && cached) {
+          cached.response.postgresqlMessageId = broadcastResult.postgresqlId;
+        }
+
+        console.log("📊 Analytics broadcast result:", broadcastResult);
+        console.log("📈 Topic categorized as:", detectedTopic);
+        console.log("🌍 Language sent:", detectedLanguage);
+        console.log("✅ Analytics saved successfully in background");
+      } catch (error) {
+        console.error("❌ Error in background analytics (user already has response):", error);
+      }
+    });
+
   } catch (error) {
-    console.error("MongoDB test endpoint error:", error);
+    console.error("❌ Error:", error);
+    const totalTime = Date.now() - startTime;
+    console.log(`⏱️ Error after: ${totalTime}ms`);
+
     res.status(500).json({
-      success: false,
-      message: "Failed to connect to MongoDB",
+      message: "Fyrirgefðu, eitthvað fór úrskeiðis. Vinsamlegast reyndu aftur. / Sorry, something went wrong. Please try again.",
       error: error.message,
     });
   }
 });
 
-// Enhanced chat endpoint with analytics integration
-app.post("/chat", verifyApiKey, async (req, res) => {
-  const startTime = Date.now();
-
+// Feedback endpoint (same as ELKO pattern with Svörum strax branding)
+app.post('/feedback', verifyApiKey, async (req, res) => {
   try {
-    const { messages, threadId, sessionId } = req.body;
-    const clientSessionId =
-      sessionId ||
-      threadId ||
-      `session_${Date.now()}_${Math.random().toString(36).slice(2, 11)}`;
-
-    console.log("\n📥 Incoming Request:", {
-      sessionId: clientSessionId,
-      messageCount: messages?.length || 0,
-      hasMessages: !!messages,
-    });
-
-    if (!messages || !Array.isArray(messages)) {
-      return res.status(400).json({ error: "Messages array is required" });
-    }
-
-    // Get the user's last message
-    const userMessage = messages[messages.length - 1]?.content || "";
-    console.log("\n💬 User Message:", userMessage);
-
-    // Create chat completion with enhanced system prompt
-    const completion = await openai.chat.completions.create({
-      model: "gpt-4o",
-      messages: [{ role: "system", content: SYSTEM_PROMPT }, ...messages],
-      temperature: 0.7,
-      max_tokens: 500,
-    });
-
-    const botResponse = completion.choices[0].message.content;
-    console.log("\n🤖 Bot Response:", botResponse);
-
-    // Detect language (simple detection based on common patterns)
-    const isIcelandic =
-      /[þæðöáíúéó]/.test(userMessage) ||
-      /\b(og|að|er|það|við|ekki|ég|þú|hann|hún|hvað|hvar|hvenær)\b/i.test(
-        userMessage,
-      );
-    const language = isIcelandic ? "is" : "en";
-
-    // Determine topic based on message content
-    let topic = "general";
-    if (/\b(job|work|employment|störf|vinna)\b/i.test(userMessage)) {
-      topic = "employment";
-    } else if (
-      /\b(service|þjónusta|símsvörun|tölvupóstur)\b/i.test(userMessage)
-    ) {
-      topic = "services";
-    } else if (/\b(price|verð|cost|kostnaður)\b/i.test(userMessage)) {
-      topic = "pricing";
-    } else if (
-      /\b(contact|tengiliður|information|upplýsingar)\b/i.test(userMessage)
-    ) {
-      topic = "contact";
-    }
-
-    // Broadcast conversation to analytics system
-    let postgresqlMessageId = null;
-    try {
-      const broadcastResult = await broadcastConversation(
-        userMessage,
-        botResponse,
-        language,
-        topic,
-        "chat",
-        clientSessionId,
-        "active",
-      );
-
-      if (broadcastResult.success) {
-        postgresqlMessageId = broadcastResult.postgresqlId;
-        console.log("✅ Conversation successfully sent to analytics");
-      } else {
-        console.log("⚠️ Analytics broadcast failed:", broadcastResult.error);
-      }
-    } catch (analyticsError) {
-      console.error("❌ Analytics integration error:", analyticsError);
-      // Continue without failing the main response
-    }
-
-    const processingTime = Date.now() - startTime;
-    console.log(`\n⏱️ Total processing time: ${processingTime}ms`);
-
-    // Return response to client
-    res.status(200).json({
-      message: botResponse,
-      threadId: clientSessionId,
-      postgresqlMessageId: postgresqlMessageId,
-      language: {
-        detected: language,
-        isIcelandic: isIcelandic,
-      },
-      topic: topic,
-      processingTime: processingTime,
-    });
-  } catch (error) {
-    console.error("OpenAI API error:", error);
-
-    const processingTime = Date.now() - startTime;
-
-    // Send user-friendly error message
-    let errorMessage = "An error occurred processing your request.";
-    if (error.response?.status === 401) {
-      errorMessage = "Authentication error. Please check API configuration.";
-    } else if (error.response?.status === 429) {
-      errorMessage = "Too many requests. Please try again later.";
-    }
-
-    // Try to broadcast error to analytics
-    try {
-      await broadcastConversation(
-        req.body.messages?.[req.body.messages.length - 1]?.content || "unknown",
-        errorMessage,
-        "en",
-        "error",
-        "error",
-        req.body.sessionId || req.body.threadId,
-        "error",
-      );
-    } catch (analyticsError) {
-      console.error(
-        "❌ Error broadcasting error to analytics:",
-        analyticsError,
-      );
-    }
-
-    res.status(500).json({
-      error: errorMessage,
-      processingTime: processingTime,
-    });
-  }
-});
-
-// Feedback endpoint for analytics integration
-app.post("/feedback", verifyApiKey, async (req, res) => {
-  try {
-    const {
-      messageId,
-      isPositive,
-      messageContent,
-      timestamp,
-      chatId,
-      language,
-      postgresqlId,
-    } = req.body;
-
-    console.log("\n📝 Feedback received:", {
+    const { messageId, isPositive, messageContent, timestamp, chatId, language, postgresqlId } = req.body;
+    
+    console.log('\n📝 Feedback received:', {
       messageId,
       postgresqlId,
       isPositive,
-      hasContent: !!messageContent,
+      hasContent: !!messageContent
     });
-
-    // Connect to MongoDB
+    
+    // Connect to MongoDB  
     const { db } = await connectToDatabase();
-
+    
     // Store feedback in MongoDB
-    await db.collection("message_feedback").insertOne({
+    await db.collection('message_feedback').insertOne({
       messageId,
       postgresqlId,
       isPositive,
@@ -503,114 +460,78 @@ app.post("/feedback", verifyApiKey, async (req, res) => {
       chatId,
       language,
       createdAt: new Date(),
-      source: "svorum-strax-chatbot",
+      source: 'svorum-strax-chatbot'
     });
-
-    console.log("💾 Feedback saved to MongoDB");
+    
+    console.log('💾 Feedback saved to MongoDB');
 
     // Forward feedback to analytics system
     try {
-      console.log("📤 Forwarding feedback to analytics system");
-
-      const analyticsResponse = await fetch(
-        "https://hysing.svorumstrax.is/api/public-feedback",
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            messageId: messageId,
-            postgresqlId: postgresqlId,
-            rating: isPositive,
-            comment: messageContent,
-            source: "svorum-strax-chatbot",
-          }),
+      console.log('📤 Forwarding feedback to analytics system');
+      
+      const analyticsResponse = await fetch('https://hysing.svorumstrax.is/api/public-feedback', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
         },
-      );
-
+        body: JSON.stringify({
+          messageId: messageId,
+          postgresqlId: postgresqlId,
+          rating: isPositive,
+          comment: messageContent,
+          source: 'svorum-strax-chatbot'
+        })
+      });  
+      
       if (analyticsResponse.ok) {
-        console.log("✅ Feedback successfully forwarded to analytics");
+        console.log('✅ Feedback successfully forwarded to analytics');
       } else {
         const responseText = await analyticsResponse.text();
-        console.error("❌ Error from analytics:", responseText);
+        console.error('❌ Error from analytics:', responseText);
       }
     } catch (forwardError) {
-      console.error("❌ Error forwarding feedback:", forwardError);
+      console.error('❌ Error forwarding feedback:', forwardError);
     }
-
+    
     return res.status(200).json({
       success: true,
-      message: "Feedback stored successfully",
+      message: 'Feedback stored successfully'
     });
   } catch (error) {
-    console.error("\n❌ Error storing feedback:", error);
+    console.error('\n❌ Error storing feedback:', error);
     return res.status(500).json({
       success: false,
-      message: "Failed to store feedback",
+      message: 'Failed to store feedback'
     });
   }
 });
 
-// Analytics proxy endpoint to handle CORS issues
-app.post("/analytics-proxy", async (req, res) => {
-  console.log("📤 Analytics proxy request received:", req.body);
-  try {
-    const response = await fetch(
-      "https://hysing.svorumstrax.is/api/public-feedback",
-      {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify(req.body),
-      },
-    );
-
-    const data = await response.json();
-    console.log("✅ Analytics system response:", data);
-    res.json(data);
-  } catch (error) {
-    console.error("❌ Analytics proxy error:", error);
-    res.status(500).json({ error: "Proxy error", message: error.message });
+// Response cache cleanup (like Sky Lagoon and ELKO)
+setInterval(() => {
+  const oneHourAgo = Date.now() - 3600000;
+  for (const [key, value] of responseCache.entries()) {
+    if (value.timestamp < oneHourAgo) {
+      responseCache.delete(key);
+    }
   }
-});
+}, 3600000); // Clean every hour
 
-// Start server
-const PORT = config.PORT;
+// Start server (same as ELKO)
 const server = app.listen(PORT, () => {
-  console.log("\n🚀 Svörum strax Server Status:");
-  console.log(`Environment: ${process.env.NODE_ENV || "development"}`);
-  console.log(`Port: ${PORT}`);
-  console.log(`Time: ${new Date().toLocaleString()}`);
-  console.log("\n⚙️ Configuration:");
-  console.log(`OpenAI API Key configured: ${!!config.OPENAI_API_KEY}`);
-  console.log(`API Key configured: ${!!config.API_KEY}`);
-  console.log(`MongoDB URI configured: ${!!process.env.MONGODB_URI}`);
-  console.log(`Analytics integration: ENABLED`);
-  console.log(`Pusher configured: ${!!process.env.PUSHER_APP_ID}`);
+  console.log(`\n🚀 Svörum strax Backend Started (OPTIMIZED)`);
+  console.log(`📍 Port: ${PORT}`);
+  console.log(`✅ Ready for connections`);
+  console.log(`⚡ Speed optimizations enabled:`);
+  console.log(`   - Fire-and-forget analytics`);
+  console.log(`   - Response caching (1 hour TTL)`);
+  console.log(`   - Performance logging`);
+  console.log(`   - Early cache checking\n`);
 });
 
-// Enhanced error handling
-server.on("error", (error) => {
-  console.error("❌ Server startup error:", error);
-  process.exit(1);
-});
-
-process.on("uncaughtException", (error) => {
-  console.error("❌ Uncaught Exception:", error);
-  process.exit(1);
-});
-
-process.on("unhandledRejection", (reason, promise) => {
-  console.error("❌ Unhandled Rejection:", reason);
-});
-
-// Graceful shutdown
+// Graceful shutdown (same as ELKO)
 process.on("SIGTERM", () => {
-  console.log("\n⚠️ SIGTERM received: closing HTTP server");
   server.close(() => {
-    console.log("✅ HTTP server closed");
+    console.log("Server closed");
     process.exit(0);
   });
 });
