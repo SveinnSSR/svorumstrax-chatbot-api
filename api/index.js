@@ -6,7 +6,7 @@ import cors from "cors";
 import OpenAI from "openai";
 import Pusher from "pusher";
 
-// Import the analytics modules (same as ELKO/Sky Lagoon)
+// Import analytics modules (same as your working chatbots)
 import { connectToDatabase } from "../database.js";
 import { getOrCreateSession } from "../sessionManager.js";
 import { processMessagePair } from "../messageProcessor.js";
@@ -15,7 +15,7 @@ import { processMessagePair } from "../messageProcessor.js";
 const PORT = process.env.PORT || 8080;
 const API_KEY = process.env.API_KEY || "svorum2025_sk3j8k4j5k6j7k8j9k0j1k2";
 
-// Initialize Express
+// Initialize Express (same as your working chatbots)
 const app = express();
 app.set("trust proxy", 1);
 
@@ -24,7 +24,7 @@ const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
 });
 
-// Initialize Pusher (same as ELKO/Sky Lagoon)
+// Initialize Pusher (same as your working chatbots)
 const pusher = new Pusher({
   appId: process.env.PUSHER_APP_ID,
   key: process.env.PUSHER_KEY,
@@ -33,7 +33,7 @@ const pusher = new Pusher({
   useTLS: true,
 });
 
-// Broadcast conversation function (same pattern as ELKO/Sky Lagoon)
+// Broadcast conversation function (same pattern as your working chatbots)
 const broadcastConversation = async (
   userMessage,
   botResponse,
@@ -44,28 +44,24 @@ const broadcastConversation = async (
   status = "active",
 ) => {
   try {
-    // Skip processing for empty messages
     if (!userMessage || !botResponse) {
       console.log("Skipping broadcast for empty message");
       return { success: false, reason: "empty_message" };
     }
 
-    // Use the message processor for MongoDB and analytics
+    // Use message processor (same as your working chatbots)
     const processResult = await processMessagePair(userMessage, botResponse, {
       sessionId: clientSessionId,
       language: language,
       topic: topic,
       type: type,
-      clientId: "svorum-strax", // IMPORTANT: This identifies Svörum strax conversations
+      clientId: "svorum-strax", // Different client ID
       status: status,
     });
 
-    // Check if processing was successful
     if (processResult.success) {
-      // Get session info
       const sessionInfo = await getOrCreateSession(clientSessionId);
 
-      // Create conversation data for Pusher
       const conversationData = {
         id: sessionInfo.conversationId,
         sessionId: sessionInfo.sessionId,
@@ -92,7 +88,7 @@ const broadcastConversation = async (
         topic: topic,
       };
 
-      // Broadcast via Pusher (use svorum-strax channel)
+      // Pusher broadcast (same as your working chatbots)
       await pusher.trigger(
         "svorum-strax-chat-channel",
         "conversation-update",
@@ -115,11 +111,11 @@ const broadcastConversation = async (
   }
 };
 
-// CORS - Simple setup (same as ELKO)
+// CORS (same as your working chatbots)
 const corsOptions = {
   origin: [
     "http://localhost:3000",
-    "http://localhost:8080",
+    "http://localhost:8080", 
     "https://svorumstrax-website.vercel.app",
     "https://svorumstrax.is",
     "https://hysing.svorumstrax.is",
@@ -133,13 +129,10 @@ const corsOptions = {
 app.use(cors(corsOptions));
 app.use(express.json());
 
-// Simple session storage (same as ELKO)
+// Simple session storage (same as your working chatbots)
 const sessions = new Map();
 
-// Response cache for speed optimization
-const responseCache = new Map();
-
-// API Key verification (same as ELKO)
+// API Key verification (same as your working chatbots)
 const verifyApiKey = (req, res, next) => {
   const apiKey = req.header("x-api-key");
 
@@ -158,13 +151,12 @@ app.get("/", (_req, res) => {
   });
 });
 
-// MongoDB test endpoint (same as ELKO)
+// MongoDB test endpoint (same as your working chatbots)
 app.get("/mongo-test", async (_req, res) => {
   try {
     console.log("MongoDB test endpoint accessed");
     const { db } = await connectToDatabase();
 
-    // Check if connection works
     const collections = await db.listCollections().toArray();
     const collectionNames = collections.map((c) => c.name);
 
@@ -185,7 +177,7 @@ app.get("/mongo-test", async (_req, res) => {
   }
 });
 
-// System prompt for Svörum strax
+// System prompt
 const SYSTEM_PROMPT = `You are a helpful AI assistant for Svörum strax, an Icelandic customer service outsourcing company based in Barcelona, Spain. You should be friendly, professional, and knowledgeable about all aspects of the company.
 
 COMPANY INFORMATION:
@@ -283,7 +275,7 @@ When answering questions:
 - Use a warm, professional tone
 - Answer in the same language as the question (Icelandic or English)`;
 
-// OPTIMIZED CHAT ENDPOINT - Speed optimized like Sky Lagoon and ELKO
+// Main chat endpoint (same pattern as your working chatbots)
 app.post("/chat", verifyApiKey, async (req, res) => {
   const startTime = Date.now();
 
@@ -293,26 +285,15 @@ app.post("/chat", verifyApiKey, async (req, res) => {
     console.log("📥 Message:", message);
     console.log("🔑 Session:", sessionId);
 
-    // OPTIMIZATION 1: Early cache check (like ELKO and Sky Lagoon)
+    // Simple language detection (same as ELKO)
     const detectedLanguage = message.match(/[áéíóúýþæðöÁÉÍÓÚÝÞÆÐÖ]/i) ? "is" : "en";
-    const cacheKey = `${sessionId}:${message.toLowerCase().trim()}:${detectedLanguage}`;
-    const cached = responseCache.get(cacheKey);
-
-    if (cached && Date.now() - cached.timestamp < 3600000) {
-      // 1 hour cache (can be extended for production)
-      console.log("📦 Using cached response");
-      const totalTime = Date.now() - startTime;
-      console.log(`⏱️ Response time (cached): ${totalTime}ms`);
-      return res.json(cached.response);
-    }
-
     console.log("🌐 Language detected:", detectedLanguage);
 
-    // OPTIMIZATION 2: Get session info early
+    // Get session info (same as your working chatbots)
     const sessionInfo = await getOrCreateSession(sessionId);
     console.log("📊 Using conversation ID:", sessionInfo.conversationId);
 
-    // Get or create local session for chat history
+    // Session management (same as your working chatbots)
     if (!sessions.has(sessionId)) {
       sessions.set(sessionId, {
         messages: [],
@@ -321,18 +302,16 @@ app.post("/chat", verifyApiKey, async (req, res) => {
     }
     const session = sessions.get(sessionId);
 
-    // Add user message to session
     session.messages.push({
       role: "user",
       content: message,
     });
 
-    // Keep only last 10 messages
     if (session.messages.length > 10) {
       session.messages = session.messages.slice(-10);
     }
 
-    // Prepare messages for OpenAI
+    // OpenAI call (same as your working chatbots)
     const messages = [
       {
         role: "system",
@@ -341,7 +320,6 @@ app.post("/chat", verifyApiKey, async (req, res) => {
       ...session.messages,
     ];
 
-    // Call OpenAI
     const completion = await openai.chat.completions.create({
       model: "gpt-4o",
       messages: messages,
@@ -351,13 +329,12 @@ app.post("/chat", verifyApiKey, async (req, res) => {
 
     const response = completion.choices[0].message.content;
 
-    // Add assistant response to session
     session.messages.push({
       role: "assistant",
       content: response,
     });
 
-    // Simple topic detection
+    // Topic detection (same as ELKO)
     const detectedTopic = /\b(job|work|employment|störf|vinna)\b/i.test(message)
       ? "employment"
       : /\b(service|þjónusta|símsvörun|tölvupóstur)\b/i.test(message)
@@ -368,11 +345,11 @@ app.post("/chat", verifyApiKey, async (req, res) => {
             ? "contact"
             : "general";
 
-    // OPTIMIZATION 3: Prepare response data
+    // Response data
     const responseData = {
       message: response,
       sessionId: sessionId,
-      postgresqlMessageId: null, // Will be updated asynchronously if needed
+      postgresqlMessageId: null,
       language: {
         detected: detectedLanguage,
         isIcelandic: detectedLanguage === "is"
@@ -380,25 +357,9 @@ app.post("/chat", verifyApiKey, async (req, res) => {
       topic: detectedTopic
     };
 
-    // OPTIMIZATION 4: Cache the response
-    responseCache.set(cacheKey, {
-      response: responseData,
-      timestamp: Date.now(),
-    });
-
-    // OPTIMIZATION 5: Performance logging (like Sky Lagoon and ELKO)
-    const totalTime = Date.now() - startTime;
-    console.log(`⏱️ Response time: ${totalTime}ms`);
-
-    // OPTIMIZATION 6: Send response immediately (FIRE-AND-FORGET ANALYTICS)
-    res.json(responseData);
-
-    // FIRE-AND-FORGET: Analytics happen in background - DON'T WAIT!
-    // This is the KEY optimization that makes it fast like Sky Lagoon and ELKO
+    // Broadcast to analytics (same as your working chatbots)
     setImmediate(async () => {
       try {
-        console.log("📨 Broadcasting response in background for session:", sessionId);
-        
         const broadcastResult = await broadcastConversation(
           message,
           response,
@@ -406,23 +367,21 @@ app.post("/chat", verifyApiKey, async (req, res) => {
           detectedTopic,
           "chat",
           sessionId,
-          "active"
+          "active",
         );
-
-        // Update cache with PostgreSQL ID if available (for feedback functionality)
-        if (broadcastResult.postgresqlId && cached) {
-          cached.response.postgresqlMessageId = broadcastResult.postgresqlId;
-        }
 
         console.log("📊 Analytics broadcast result:", broadcastResult);
         console.log("📈 Topic categorized as:", detectedTopic);
         console.log("🌍 Language sent:", detectedLanguage);
-        console.log("✅ Analytics saved successfully in background");
       } catch (error) {
-        console.error("❌ Error in background analytics (user already has response):", error);
+        console.error("❌ Error in broadcast function:", error);
       }
     });
 
+    const totalTime = Date.now() - startTime;
+    console.log(`⏱️ Response time: ${totalTime}ms`);
+
+    res.json(responseData);
   } catch (error) {
     console.error("❌ Error:", error);
     const totalTime = Date.now() - startTime;
@@ -435,22 +394,20 @@ app.post("/chat", verifyApiKey, async (req, res) => {
   }
 });
 
-// Feedback endpoint (same as ELKO pattern with Svörum strax branding)
+// Feedback endpoint (same as your working chatbots)
 app.post('/feedback', verifyApiKey, async (req, res) => {
   try {
     const { messageId, isPositive, messageContent, timestamp, chatId, language, postgresqlId } = req.body;
     
-    console.log('\n📝 Feedback received:', {
+    console.log('📝 Feedback received:', {
       messageId,
       postgresqlId,
       isPositive,
       hasContent: !!messageContent
     });
     
-    // Connect to MongoDB  
     const { db } = await connectToDatabase();
     
-    // Store feedback in MongoDB
     await db.collection('message_feedback').insertOne({
       messageId,
       postgresqlId,
@@ -465,10 +422,8 @@ app.post('/feedback', verifyApiKey, async (req, res) => {
     
     console.log('💾 Feedback saved to MongoDB');
 
-    // Forward feedback to analytics system
+    // Forward to analytics (same as your working chatbots)
     try {
-      console.log('📤 Forwarding feedback to analytics system');
-      
       const analyticsResponse = await fetch('https://hysing.svorumstrax.is/api/public-feedback', {
         method: 'POST',
         headers: {
@@ -485,9 +440,6 @@ app.post('/feedback', verifyApiKey, async (req, res) => {
       
       if (analyticsResponse.ok) {
         console.log('✅ Feedback successfully forwarded to analytics');
-      } else {
-        const responseText = await analyticsResponse.text();
-        console.error('❌ Error from analytics:', responseText);
       }
     } catch (forwardError) {
       console.error('❌ Error forwarding feedback:', forwardError);
@@ -498,7 +450,7 @@ app.post('/feedback', verifyApiKey, async (req, res) => {
       message: 'Feedback stored successfully'
     });
   } catch (error) {
-    console.error('\n❌ Error storing feedback:', error);
+    console.error('❌ Error storing feedback:', error);
     return res.status(500).json({
       success: false,
       message: 'Failed to store feedback'
@@ -506,29 +458,14 @@ app.post('/feedback', verifyApiKey, async (req, res) => {
   }
 });
 
-// Response cache cleanup (like Sky Lagoon and ELKO)
-setInterval(() => {
-  const oneHourAgo = Date.now() - 3600000;
-  for (const [key, value] of responseCache.entries()) {
-    if (value.timestamp < oneHourAgo) {
-      responseCache.delete(key);
-    }
-  }
-}, 3600000); // Clean every hour
-
-// Start server (same as ELKO)
+// Start server (same as your working chatbots)
 const server = app.listen(PORT, () => {
-  console.log(`\n🚀 Svörum strax Backend Started (OPTIMIZED)`);
+  console.log(`\n🚀 Svörum strax Backend Started`);
   console.log(`📍 Port: ${PORT}`);
-  console.log(`✅ Ready for connections`);
-  console.log(`⚡ Speed optimizations enabled:`);
-  console.log(`   - Fire-and-forget analytics`);
-  console.log(`   - Response caching (1 hour TTL)`);
-  console.log(`   - Performance logging`);
-  console.log(`   - Early cache checking\n`);
+  console.log(`✅ Ready for connections\n`);
 });
 
-// Graceful shutdown (same as ELKO)
+// Graceful shutdown (same as your working chatbots)
 process.on("SIGTERM", () => {
   server.close(() => {
     console.log("Server closed");
