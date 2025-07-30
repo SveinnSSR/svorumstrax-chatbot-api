@@ -279,7 +279,7 @@ When answering questions:
 const responseCache = new Map();
 
 // Main chat endpoint - OPTIMIZED FOR SPEED and handles both request formats
-app.post("/chat", verifyApiKey, async (req, res) => {
+app.post("/chat", async (req, res) => {
   const startTime = Date.now();
 
   try {
