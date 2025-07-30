@@ -1,28 +1,173 @@
-const OpenAI = require('openai');
-const cors = require('cors');
+// Enhanced Svörum strax Chatbot API with Analytics Integration
+import dotenv from "dotenv";
+dotenv.config();
+
+// Core dependencies
+import express from "express";
+import cors from "cors";
+import rateLimit from "express-rate-limit";
+import OpenAI from "openai";
+import { v4 as uuidv4 } from "uuid";
+import Pusher from "pusher";
+
+// Analytics Integration Imports
+import { connectToDatabase } from "../database.js";
+import { processMessagePair } from "../messageProcessor.js";
+import { getOrCreateSession } from "../sessionManager.js";
+
+console.log("🚀 SVÖRUM STRAX SERVER STARTING - " + new Date().toISOString());
+console.log("Environment check - NODE_ENV:", process.env.NODE_ENV);
+console.log("MONGODB_URI exists:", !!process.env.MONGODB_URI);
+console.log("ANALYTICS_API_KEY exists:", !!process.env.ANALYTICS_API_KEY);
+
+// Initialize Pusher with your credentials
+const pusher = new Pusher({
+  appId: process.env.PUSHER_APP_ID,
+  key: process.env.PUSHER_KEY,
+  secret: process.env.PUSHER_SECRET,
+  cluster: process.env.PUSHER_CLUSTER,
+  useTLS: true,
+});
+
+// Enhanced broadcastConversation function that integrates with analytics
+const broadcastConversation = async (
+  userMessage,
+  botResponse,
+  language,
+  topic = "general",
+  type = "chat",
+  clientSessionId = null,
+  status = "active",
+) => {
+  try {
+    // Skip processing for empty messages
+    if (!userMessage || !botResponse) {
+      console.log("Skipping broadcast for empty message");
+      return { success: false, reason: "empty_message" };
+    }
+
+    // Use the message processor for MongoDB and analytics
+    const processResult = await processMessagePair(userMessage, botResponse, {
+      sessionId: clientSessionId,
+      language: language,
+      topic: topic,
+      type: type,
+      clientId: "svorum-strax", // Set to Svörum strax client ID
+      status: status,
+    });
+
+    // Check if processing was successful
+    if (processResult.success) {
+      // Handle Pusher broadcasting for real-time updates
+      try {
+        const sessionInfo = await getOrCreateSession(clientSessionId);
+
+        // Create minimal conversation data for Pusher
+        const conversationData = {
+          id: sessionInfo.conversationId,
+          sessionId: sessionInfo.sessionId,
+          clientId: "svorum-strax",
+          userMessage: userMessage,
+          botResponse: botResponse,
+          messages: [
+            {
+              id: processResult.userMessageId,
+              content: userMessage,
+              role: "user",
+              type: "user",
+            },
+            {
+              id: processResult.botMessageId,
+              content: botResponse,
+              role: "assistant",
+              type: "bot",
+            },
+          ],
+          startedAt: sessionInfo.startedAt,
+          endedAt: new Date().toISOString(),
+          language: language,
+          topic: topic,
+        };
+
+        // Pusher broadcast
+        await pusher.trigger(
+          "chat-channel",
+          "conversation-update",
+          conversationData,
+        );
+        console.log("✅ Pusher broadcast sent successfully");
+      } catch (pusherError) {
+        console.error("Pusher error:", pusherError.message);
+        // Continue even if Pusher fails - critical data is already saved
+      }
+
+      return {
+        success: true,
+        postgresqlId: processResult.postgresqlId,
+      };
+    } else if (processResult.error === "duplicate_message") {
+      return {
+        success: true,
+        postgresqlId: null,
+        deduplicated: true,
+      };
+    } else {
+      console.log(
+        "Message processor error:",
+        processResult.error,
+        processResult.reason,
+      );
+      return {
+        success: false,
+        postgresqlId: null,
+        error: processResult.error || "processing_error",
+      };
+    }
+  } catch (error) {
+    console.error("Error in broadcastConversation:", error.message);
+    return { success: false, postgresqlId: null };
+  }
+};
+
+// Configuration
+const config = {
+  PORT: process.env.PORT || "8080",
+  OPENAI_API_KEY: process.env.OPENAI_API_KEY,
+  API_KEY: process.env.API_KEY,
+};
+
+// Initialize Express
+const app = express();
+app.set("trust proxy", 1);
 
 // Initialize OpenAI
 const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
+  apiKey: config.OPENAI_API_KEY,
 });
 
-// CORS configuration
+// CORS Configuration - Enhanced for analytics integration
 const corsOptions = {
-  origin: function (origin, callback) {
-    const allowedOrigins = process.env.ALLOWED_ORIGINS?.split(',') || [];
-    // Allow requests with no origin (like mobile apps or curl)
-    if (!origin) return callback(null, true);
-    
-    if (allowedOrigins.indexOf(origin) !== -1 || allowedOrigins.includes('*')) {
-      callback(null, true);
-    } else {
-      callback(new Error('Not allowed by CORS'));
-    }
-  },
+  origin: [
+    "http://localhost:3000",
+    "http://localhost:8000",
+    "http://localhost:8080",
+    "https://svorumstrax-website.vercel.app",
+    "https://svorumstrax.is",
+    "https://hysing.svorumstrax.is", // Analytics dashboard
+  ],
+  methods: ["GET", "POST", "OPTIONS", "HEAD"],
+  allowedHeaders: ["Content-Type", "x-api-key", "Authorization"],
   credentials: true,
 };
 
-// System prompt with all Svörum strax information
+// Rate limiter
+const limiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 100, // limit each IP to 100 requests per windowMs
+  message: { error: "Too many requests. Please try again later." },
+});
+
+// System prompt for Svörum strax chatbot
 const SYSTEM_PROMPT = `You are a helpful AI assistant for Svörum strax, an Icelandic customer service outsourcing company based in Barcelona, Spain. You should be friendly, professional, and knowledgeable about all aspects of the company.
 
 COMPANY INFORMATION:
@@ -120,73 +265,352 @@ When answering questions:
 - Use a warm, professional tone
 - Answer in the same language as the question (Icelandic or English)`;
 
-// Helper function to handle CORS
-const corsMiddleware = (handler) => {
-  return async (req, res) => {
-    // Handle CORS
-    await new Promise((resolve, reject) => {
-      cors(corsOptions)(req, res, (result) => {
-        if (result instanceof Error) {
-          return reject(result);
-        }
-        return resolve(result);
-      });
-    });
+// API Key verification middleware
+const verifyApiKey = (req, res, next) => {
+  const apiKey = req.header("x-api-key");
+  console.log("\n🔑 API Key Check:", {
+    receivedKey: apiKey,
+    configuredKey: process.env.API_KEY,
+    matches: apiKey === process.env.API_KEY,
+  });
 
-    // Handle OPTIONS request
-    if (req.method === 'OPTIONS') {
-      return res.status(200).end();
-    }
-
-    // Call the actual handler
-    return handler(req, res);
-  };
+  if (!apiKey || apiKey !== process.env.API_KEY) {
+    console.error("❌ Invalid or missing API key");
+    return res.status(401).json({ error: "Unauthorized request" });
+  }
+  next();
 };
 
-// Main handler
-async function handler(req, res) {
-  if (req.method !== 'POST') {
-    return res.status(405).json({ error: 'Method not allowed' });
+// Middleware
+app.use(cors(corsOptions));
+app.use(limiter);
+app.use(express.json());
+
+// Add request logging middleware
+app.use((req, res, next) => {
+  console.log(`⚡ REQUEST: ${req.method} ${req.path}`);
+  next();
+});
+
+// Health check endpoint
+app.get("/", (req, res) => {
+  res.json({
+    status: "OK",
+    service: "Svörum strax Chatbot API",
+    timestamp: new Date().toISOString(),
+    config: {
+      openaiConfigured: !!config.OPENAI_API_KEY,
+      apiKeyConfigured: !!config.API_KEY,
+      mongodbConfigured: !!process.env.MONGODB_URI,
+      analyticsEnabled: true,
+    },
+  });
+});
+
+// MongoDB test endpoint
+app.get("/mongo-test", async (req, res) => {
+  try {
+    console.log("MongoDB test endpoint accessed");
+    const { db } = await connectToDatabase();
+
+    // Check if connection works by listing collections
+    const collections = await db.listCollections().toArray();
+    const collectionNames = collections.map((c) => c.name);
+
+    res.status(200).json({
+      success: true,
+      message: "MongoDB connected successfully",
+      collections: collectionNames,
+      timestamp: new Date().toISOString(),
+    });
+  } catch (error) {
+    console.error("MongoDB test endpoint error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to connect to MongoDB",
+      error: error.message,
+    });
   }
+});
+
+// Enhanced chat endpoint with analytics integration
+app.post("/chat", verifyApiKey, async (req, res) => {
+  const startTime = Date.now();
 
   try {
-    const { messages, threadId } = req.body;
+    const { messages, threadId, sessionId } = req.body;
+    const clientSessionId =
+      sessionId ||
+      threadId ||
+      `session_${Date.now()}_${Math.random().toString(36).slice(2, 11)}`;
+
+    console.log("\n📥 Incoming Request:", {
+      sessionId: clientSessionId,
+      messageCount: messages?.length || 0,
+      hasMessages: !!messages,
+    });
 
     if (!messages || !Array.isArray(messages)) {
-      return res.status(400).json({ error: 'Messages array is required' });
+      return res.status(400).json({ error: "Messages array is required" });
     }
 
-    // Create chat completion
+    // Get the user's last message
+    const userMessage = messages[messages.length - 1]?.content || "";
+    console.log("\n💬 User Message:", userMessage);
+
+    // Create chat completion with enhanced system prompt
     const completion = await openai.chat.completions.create({
       model: "gpt-4o",
-      messages: [
-        { role: 'system', content: SYSTEM_PROMPT },
-        ...messages
-      ],
+      messages: [{ role: "system", content: SYSTEM_PROMPT }, ...messages],
       temperature: 0.7,
       max_tokens: 500,
     });
 
-    const reply = completion.choices[0].message.content;
+    const botResponse = completion.choices[0].message.content;
+    console.log("\n🤖 Bot Response:", botResponse);
 
+    // Detect language (simple detection based on common patterns)
+    const isIcelandic =
+      /[þæðöáíúéó]/.test(userMessage) ||
+      /\b(og|að|er|það|við|ekki|ég|þú|hann|hún|hvað|hvar|hvenær)\b/i.test(
+        userMessage,
+      );
+    const language = isIcelandic ? "is" : "en";
+
+    // Determine topic based on message content
+    let topic = "general";
+    if (/\b(job|work|employment|störf|vinna)\b/i.test(userMessage)) {
+      topic = "employment";
+    } else if (
+      /\b(service|þjónusta|símsvörun|tölvupóstur)\b/i.test(userMessage)
+    ) {
+      topic = "services";
+    } else if (/\b(price|verð|cost|kostnaður)\b/i.test(userMessage)) {
+      topic = "pricing";
+    } else if (
+      /\b(contact|tengiliður|information|upplýsingar)\b/i.test(userMessage)
+    ) {
+      topic = "contact";
+    }
+
+    // Broadcast conversation to analytics system
+    let postgresqlMessageId = null;
+    try {
+      const broadcastResult = await broadcastConversation(
+        userMessage,
+        botResponse,
+        language,
+        topic,
+        "chat",
+        clientSessionId,
+        "active",
+      );
+
+      if (broadcastResult.success) {
+        postgresqlMessageId = broadcastResult.postgresqlId;
+        console.log("✅ Conversation successfully sent to analytics");
+      } else {
+        console.log("⚠️ Analytics broadcast failed:", broadcastResult.error);
+      }
+    } catch (analyticsError) {
+      console.error("❌ Analytics integration error:", analyticsError);
+      // Continue without failing the main response
+    }
+
+    const processingTime = Date.now() - startTime;
+    console.log(`\n⏱️ Total processing time: ${processingTime}ms`);
+
+    // Return response to client
     res.status(200).json({
-      message: reply,
-      threadId: threadId || 'default',
+      message: botResponse,
+      threadId: clientSessionId,
+      postgresqlMessageId: postgresqlMessageId,
+      language: {
+        detected: language,
+        isIcelandic: isIcelandic,
+      },
+      topic: topic,
+      processingTime: processingTime,
+    });
+  } catch (error) {
+    console.error("OpenAI API error:", error);
+
+    const processingTime = Date.now() - startTime;
+
+    // Send user-friendly error message
+    let errorMessage = "An error occurred processing your request.";
+    if (error.response?.status === 401) {
+      errorMessage = "Authentication error. Please check API configuration.";
+    } else if (error.response?.status === 429) {
+      errorMessage = "Too many requests. Please try again later.";
+    }
+
+    // Try to broadcast error to analytics
+    try {
+      await broadcastConversation(
+        req.body.messages?.[req.body.messages.length - 1]?.content || "unknown",
+        errorMessage,
+        "en",
+        "error",
+        "error",
+        req.body.sessionId || req.body.threadId,
+        "error",
+      );
+    } catch (analyticsError) {
+      console.error(
+        "❌ Error broadcasting error to analytics:",
+        analyticsError,
+      );
+    }
+
+    res.status(500).json({
+      error: errorMessage,
+      processingTime: processingTime,
+    });
+  }
+});
+
+// Feedback endpoint for analytics integration
+app.post("/feedback", verifyApiKey, async (req, res) => {
+  try {
+    const {
+      messageId,
+      isPositive,
+      messageContent,
+      timestamp,
+      chatId,
+      language,
+      postgresqlId,
+    } = req.body;
+
+    console.log("\n📝 Feedback received:", {
+      messageId,
+      postgresqlId,
+      isPositive,
+      hasContent: !!messageContent,
     });
 
-  } catch (error) {
-    console.error('OpenAI API error:', error);
-    
-    // Send user-friendly error message
-    if (error.response?.status === 401) {
-      res.status(500).json({ error: 'Authentication error. Please check API configuration.' });
-    } else if (error.response?.status === 429) {
-      res.status(429).json({ error: 'Too many requests. Please try again later.' });
-    } else {
-      res.status(500).json({ error: 'An error occurred processing your request.' });
-    }
-  }
-}
+    // Connect to MongoDB
+    const { db } = await connectToDatabase();
 
-// Export the handler with CORS middleware
-module.exports = corsMiddleware(handler);
+    // Store feedback in MongoDB
+    await db.collection("message_feedback").insertOne({
+      messageId,
+      postgresqlId,
+      isPositive,
+      messageContent,
+      timestamp: new Date(timestamp),
+      chatId,
+      language,
+      createdAt: new Date(),
+      source: "svorum-strax-chatbot",
+    });
+
+    console.log("💾 Feedback saved to MongoDB");
+
+    // Forward feedback to analytics system
+    try {
+      console.log("📤 Forwarding feedback to analytics system");
+
+      const analyticsResponse = await fetch(
+        "https://hysing.svorumstrax.is/api/public-feedback",
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            messageId: messageId,
+            postgresqlId: postgresqlId,
+            rating: isPositive,
+            comment: messageContent,
+            source: "svorum-strax-chatbot",
+          }),
+        },
+      );
+
+      if (analyticsResponse.ok) {
+        console.log("✅ Feedback successfully forwarded to analytics");
+      } else {
+        const responseText = await analyticsResponse.text();
+        console.error("❌ Error from analytics:", responseText);
+      }
+    } catch (forwardError) {
+      console.error("❌ Error forwarding feedback:", forwardError);
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: "Feedback stored successfully",
+    });
+  } catch (error) {
+    console.error("\n❌ Error storing feedback:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Failed to store feedback",
+    });
+  }
+});
+
+// Analytics proxy endpoint to handle CORS issues
+app.post("/analytics-proxy", async (req, res) => {
+  console.log("📤 Analytics proxy request received:", req.body);
+  try {
+    const response = await fetch(
+      "https://hysing.svorumstrax.is/api/public-feedback",
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(req.body),
+      },
+    );
+
+    const data = await response.json();
+    console.log("✅ Analytics system response:", data);
+    res.json(data);
+  } catch (error) {
+    console.error("❌ Analytics proxy error:", error);
+    res.status(500).json({ error: "Proxy error", message: error.message });
+  }
+});
+
+// Start server
+const PORT = config.PORT;
+const server = app.listen(PORT, () => {
+  console.log("\n🚀 Svörum strax Server Status:");
+  console.log(`Environment: ${process.env.NODE_ENV || "development"}`);
+  console.log(`Port: ${PORT}`);
+  console.log(`Time: ${new Date().toLocaleString()}`);
+  console.log("\n⚙️ Configuration:");
+  console.log(`OpenAI API Key configured: ${!!config.OPENAI_API_KEY}`);
+  console.log(`API Key configured: ${!!config.API_KEY}`);
+  console.log(`MongoDB URI configured: ${!!process.env.MONGODB_URI}`);
+  console.log(`Analytics integration: ENABLED`);
+  console.log(`Pusher configured: ${!!process.env.PUSHER_APP_ID}`);
+});
+
+// Enhanced error handling
+server.on("error", (error) => {
+  console.error("❌ Server startup error:", error);
+  process.exit(1);
+});
+
+process.on("uncaughtException", (error) => {
+  console.error("❌ Uncaught Exception:", error);
+  process.exit(1);
+});
+
+process.on("unhandledRejection", (reason, promise) => {
+  console.error("❌ Unhandled Rejection:", reason);
+});
+
+// Graceful shutdown
+process.on("SIGTERM", () => {
+  console.log("\n⚠️ SIGTERM received: closing HTTP server");
+  server.close(() => {
+    console.log("✅ HTTP server closed");
+    process.exit(0);
+  });
+});

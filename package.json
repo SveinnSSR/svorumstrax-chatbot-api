@@ -1,21 +1,29 @@
 {
   "name": "svorumstrax-chatbot-api",
   "version": "1.0.0",
-  "description": "",
-  "main": "index.js",
+  "description": "Svörum strax chatbot API with analytics integration",
+  "main": "api/index.js",
+  "type": "module",
   "directories": {
-    "lib": "lib"
+    "lib": "lib",
+    "api": "api"
   },
   "scripts": {
+    "start": "node api/index.js",
+    "dev": "node api/index.js",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
-  "keywords": [],
-  "author": "",
+  "keywords": ["chatbot", "openai", "svorumstrax", "analytics"],
+  "author": "Svörum strax",
   "license": "ISC",
-  "type": "commonjs",
   "dependencies": {
     "cors": "^2.8.5",
     "dotenv": "^17.0.1",
-    "openai": "^5.8.2"
+    "express": "^4.18.2",
+    "express-rate-limit": "^7.1.5",
+    "mongodb": "^6.3.0",
+    "openai": "^4.24.7",
+    "pusher": "^5.1.3",
+    "uuid": "^9.0.1"
   }
 }
