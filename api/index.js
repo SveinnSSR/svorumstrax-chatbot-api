@@ -275,7 +275,10 @@ When answering questions:
 - Use a warm, professional tone
 - Answer in the same language as the question (Icelandic or English)`;
 
-// Main chat endpoint (same pattern as your working chatbots)
+// PERFORMANCE OPTIMIZATION: Response cache (same as ELKO)
+const responseCache = new Map();
+
+// Main chat endpoint - OPTIMIZED FOR SPEED (same as ELKO)
 app.post("/chat", verifyApiKey, async (req, res) => {
   const startTime = Date.now();
 
@@ -285,12 +288,25 @@ app.post("/chat", verifyApiKey, async (req, res) => {
     console.log("📥 Message:", message);
     console.log("🔑 Session:", sessionId);
 
+    // OPTIMIZATION 1: Start session retrieval immediately
+    const sessionPromise = getOrCreateSession(sessionId);
+
     // Simple language detection (same as ELKO)
     const detectedLanguage = message.match(/[áéíóúýþæðöÁÉÍÓÚÝÞÆÐÖ]/i) ? "is" : "en";
     console.log("🌐 Language detected:", detectedLanguage);
 
-    // Get session info (same as your working chatbots)
-    const sessionInfo = await getOrCreateSession(sessionId);
+    // OPTIMIZATION 2: Check response cache early
+    const cacheKey = `${sessionId}:${message.toLowerCase().trim()}:${detectedLanguage}`;
+    const cached = responseCache.get(cacheKey);
+
+    if (cached && Date.now() - cached.timestamp < 3600000) {
+      // 1 hour cache
+      console.log("📦 Using cached response");
+      return res.json(cached.response);
+    }
+
+    // Wait for session info
+    const sessionInfo = await sessionPromise;
     console.log("📊 Using conversation ID:", sessionInfo.conversationId);
 
     // Session management (same as your working chatbots)
@@ -307,6 +323,7 @@ app.post("/chat", verifyApiKey, async (req, res) => {
       content: message,
     });
 
+    // Keep only last 10 messages
     if (session.messages.length > 10) {
       session.messages = session.messages.slice(-10);
     }
@@ -345,19 +362,31 @@ app.post("/chat", verifyApiKey, async (req, res) => {
             ? "contact"
             : "general";
 
-    // Response data
+    // OPTIMIZATION 3: Cache the response
     const responseData = {
       message: response,
       sessionId: sessionId,
-      postgresqlMessageId: null,
+      postgresqlMessageId: null, // Will be updated asynchronously
       language: {
         detected: detectedLanguage,
         isIcelandic: detectedLanguage === "is"
       },
-      topic: detectedTopic
+      topic: detectedTopic,
+      debugInfo:
+        process.env.NODE_ENV === "development"
+          ? {
+              topic: detectedTopic,
+              promptLength: SYSTEM_PROMPT.length,
+            }
+          : undefined,
     };
 
-    // Broadcast to analytics (same as your working chatbots)
+    responseCache.set(cacheKey, {
+      response: responseData,
+      timestamp: Date.now(),
+    });
+
+    // OPTIMIZATION 4: Fire-and-forget broadcasting - DON'T WAIT!
     setImmediate(async () => {
       try {
         const broadcastResult = await broadcastConversation(
@@ -370,6 +399,11 @@ app.post("/chat", verifyApiKey, async (req, res) => {
           "active",
         );
 
+        // Update cache with PostgreSQL ID if available
+        if (broadcastResult.postgresqlId && cached) {
+          cached.response.postgresqlMessageId = broadcastResult.postgresqlId;
+        }
+
         console.log("📊 Analytics broadcast result:", broadcastResult);
         console.log("📈 Topic categorized as:", detectedTopic);
         console.log("🌍 Language sent:", detectedLanguage);
@@ -378,9 +412,11 @@ app.post("/chat", verifyApiKey, async (req, res) => {
       }
     });
 
+    // Log performance
     const totalTime = Date.now() - startTime;
     console.log(`⏱️ Response time: ${totalTime}ms`);
 
+    // Send response immediately
     res.json(responseData);
   } catch (error) {
     console.error("❌ Error:", error);
@@ -458,11 +494,28 @@ app.post('/feedback', verifyApiKey, async (req, res) => {
   }
 });
 
+// PERFORMANCE OPTIMIZATION: Cleanup cache periodically (same as ELKO)
+setInterval(() => {
+  const oneHourAgo = Date.now() - 3600000;
+  for (const [key, value] of responseCache.entries()) {
+    if (value.timestamp < oneHourAgo) {
+      responseCache.delete(key);
+    }
+  }
+}, 3600000); // Clean every hour
+
 // Start server (same as your working chatbots)
 const server = app.listen(PORT, () => {
   console.log(`\n🚀 Svörum strax Backend Started`);
   console.log(`📍 Port: ${PORT}`);
   console.log(`✅ Ready for connections\n`);
+  
+  // Performance features loaded
+  console.log(`📚 Performance Features Loaded:`);
+  console.log(`   - Response caching (1 hour TTL)`);
+  console.log(`   - Fire-and-forget analytics`);
+  console.log(`   - Performance logging`);
+  console.log(`   - Cache cleanup intervals\n`);
 });
 
 // Graceful shutdown (same as your working chatbots)
