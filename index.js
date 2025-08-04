@@ -5,6 +5,8 @@ import express from "express";
 import cors from "cors";
 import OpenAI from "openai";
 import Pusher from "pusher";
+import { WebSocketServer } from 'ws';
+import { createServer } from 'http';
 
 // FIXED: Import analytics modules (removed ../ paths)
 import { connectToDatabase } from "./database.js";
@@ -18,6 +20,9 @@ const API_KEY = process.env.API_KEY || "svorum2025_sk3j8k4j5k6j7k8j9k0j1k2";
 // Initialize Express (same as your working chatbots)
 const app = express();
 app.set("trust proxy", 1);
+
+// Create HTTP server for WebSocket support
+const server = createServer(app);
 
 // Initialize OpenAI
 const openai = new OpenAI({
@@ -33,7 +38,177 @@ const pusher = new Pusher({
   useTLS: true,
 });
 
-// Broadcast conversation function (same pattern as your working chatbots)
+// WebSocket server for streaming responses
+const wss = new WebSocketServer({ server });
+
+// WebSocket connection handling
+wss.on('connection', (ws, req) => {
+  console.log('🔌 WebSocket client connected');
+  
+  ws.on('message', async (message) => {
+    try {
+      const data = JSON.parse(message);
+      console.log('📨 WebSocket message received:', {
+        type: data.type,
+        sessionId: data.sessionId,
+        hasMessage: !!data.message
+      });
+      
+      if (data.type === 'chat' && data.message) {
+        await handleStreamingChat(ws, data);
+      }
+    } catch (error) {
+      console.error('❌ WebSocket message error:', error);
+      ws.send(JSON.stringify({ 
+        type: 'error', 
+        message: 'Invalid message format' 
+      }));
+    }
+  });
+
+  ws.on('close', () => {
+    console.log('🔌 WebSocket client disconnected');
+  });
+
+  ws.on('error', (error) => {
+    console.error('❌ WebSocket error:', error);
+  });
+});
+
+// Streaming chat handler
+async function handleStreamingChat(ws, data) {
+  const { message: userMessage, sessionId } = data;
+  const streamId = `stream_${Date.now()}_${Math.random().toString(36).slice(2, 11)}`;
+  
+  try {
+    // Send connection confirmation
+    ws.send(JSON.stringify({
+      type: 'stream-connected',
+      streamId: streamId,
+      sessionId: sessionId
+    }));
+
+    // Get session and detect language
+    const sessionInfo = await getOrCreateSession(sessionId);
+    const detectedLanguage = userMessage.match(/[áéíóúýþæðöÁÉÍÓÚÝÞÆÐÖ]/i) ? "is" : "en";
+    
+    // Get session for conversation history
+    if (!sessions.has(sessionId)) {
+      sessions.set(sessionId, {
+        messages: [],
+        createdAt: new Date(),
+      });
+    }
+    const session = sessions.get(sessionId);
+
+    // Add user message to session
+    session.messages.push({
+      role: "user",
+      content: userMessage,
+    });
+
+    // Prepare messages for OpenAI
+    const messages = [
+      {
+        role: "system",
+        content: SYSTEM_PROMPT,
+      },
+      ...session.messages.slice(-10), // Keep last 10 messages
+    ];
+
+    // Create streaming completion
+    const stream = await openai.chat.completions.create({
+      model: "gpt-4o",
+      messages: messages,
+      temperature: 0.7,
+      max_tokens: 500,
+      stream: true
+    });
+
+    let fullResponse = '';
+    let chunkNumber = 0;
+
+    // Stream the response
+    for await (const chunk of stream) {
+      const content = chunk.choices[0]?.delta?.content || '';
+      
+      if (content) {
+        fullResponse += content;
+        chunkNumber++;
+        
+        // Send chunk via WebSocket
+        ws.send(JSON.stringify({
+          type: 'stream-chunk',
+          streamId: streamId,
+          sessionId: sessionId,
+          content: content,
+          chunkNumber: chunkNumber
+        }));
+      }
+    }
+
+    // Add assistant response to session
+    session.messages.push({
+      role: "assistant",
+      content: fullResponse,
+    });
+
+    // Send completion signal
+    ws.send(JSON.stringify({
+      type: 'stream-complete',
+      streamId: streamId,
+      sessionId: sessionId,
+      completeContent: fullResponse
+    }));
+
+    // Fire-and-forget analytics (same as your existing system)
+    setImmediate(async () => {
+      try {
+        const detectedTopic = detectTopic(userMessage);
+        await broadcastConversation(
+          userMessage,
+          fullResponse,
+          detectedLanguage,
+          detectedTopic,
+          "streaming_chat",
+          sessionId,
+          "active"
+        );
+        console.log('📊 Streaming analytics sent');
+      } catch (error) {
+        console.error('❌ Error in streaming analytics:', error);
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ Streaming error:', error);
+    ws.send(JSON.stringify({
+      type: 'stream-error',
+      streamId: streamId,
+      sessionId: sessionId,
+      error: error.message
+    }));
+  }
+}
+
+// Topic detection for Svörum Strax (same as your existing logic)
+function detectTopic(message) {
+  const msg = message.toLowerCase();
+  
+  if (/\b(job|work|employment|störf|vinna)\b/i.test(msg)) {
+    return "employment";
+  } else if (/\b(service|þjónusta|símsvörun|tölvupóstur)\b/i.test(msg)) {
+    return "services";
+  } else if (/\b(price|verð|cost|kostnaður)\b/i.test(msg)) {
+    return "pricing";
+  } else if (/\b(contact|tengiliður|information|upplýsingar)\b/i.test(msg)) {
+    return "contact";
+  }
+  
+  return "general";
+}
+
+// Broadcast conversation function (same pattern as your existing system)
 const broadcastConversation = async (
   userMessage,
   botResponse,
@@ -49,7 +224,7 @@ const broadcastConversation = async (
       return { success: false, reason: "empty_message" };
     }
 
-    // Use message processor (same as your working chatbots)
+    // Use message processor
     const processResult = await processMessagePair(userMessage, botResponse, {
       sessionId: clientSessionId,
       language: language,
@@ -111,7 +286,7 @@ const broadcastConversation = async (
   }
 };
 
-// CORS (same as your working chatbots)
+// CORS (Updated to include your frontend domain)
 const corsOptions = {
   origin: [
     "http://localhost:3000",
@@ -119,6 +294,7 @@ const corsOptions = {
     "https://svorumstrax-website.vercel.app",
     "https://svorumstrax.is",
     "https://hysing.svorumstrax.is",
+    // Add any other Svörum Strax domains here
   ],
   methods: ["GET", "POST", "OPTIONS"],
   allowedHeaders: ["Content-Type", "x-api-key"],
@@ -148,6 +324,7 @@ app.get("/", (_req, res) => {
     status: "OK",
     service: "Svörum strax AI Backend",
     timestamp: new Date().toISOString(),
+    features: ["HTTP API", "WebSocket Streaming", "SSE Streaming"]
   });
 });
 
@@ -177,7 +354,7 @@ app.get("/mongo-test", async (_req, res) => {
   }
 });
 
-// System prompt
+// System prompt (your existing Svörum Strax prompt)
 const SYSTEM_PROMPT = `You are a helpful AI assistant for Svörum strax, an Icelandic customer service outsourcing company based in Barcelona, Spain. You should be friendly, professional, and knowledgeable about all aspects of the company.
 
 COMPANY INFORMATION:
@@ -275,8 +452,164 @@ When answering questions:
 - Use a warm, professional tone
 - Answer in the same language as the question (Icelandic or English)`;
 
-// PERFORMANCE OPTIMIZATION: Response cache (same as ELKO)
+// PERFORMANCE OPTIMIZATION: Response cache (same as your existing system)
 const responseCache = new Map();
+
+// SSE Streaming endpoint (Vercel compatible!) - ADD BEFORE your existing /chat endpoint
+app.post("/chat-stream", verifyApiKey, async (req, res) => {
+  const startTime = Date.now();
+
+  try {
+    // Handle both old format (messages, threadId) and new format (message, sessionId)
+    let userMessage, sessionId;
+    
+    if (req.body.messages && Array.isArray(req.body.messages)) {
+      // OLD FORMAT: { messages: [...], threadId: "..." }
+      const lastMessage = req.body.messages[req.body.messages.length - 1];
+      userMessage = lastMessage?.content || "";
+      sessionId = req.body.threadId || `session_${Date.now()}`;
+      console.log("📥 Using OLD request format");
+    } else {
+      // NEW FORMAT: { message: "...", sessionId: "..." }
+      userMessage = req.body.message;
+      sessionId = req.body.sessionId || `session_${Date.now()}`;
+      console.log("📥 Using NEW request format");
+    }
+
+    if (!userMessage) {
+      return res.status(400).json({ error: 'Message is required' });
+    }
+
+    console.log("📡 SSE Stream Request:", userMessage);
+    console.log("🔑 Session:", sessionId);
+
+    // Set up Server-Sent Events headers
+    res.writeHead(200, {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache',
+      'Connection': 'keep-alive',
+      'Access-Control-Allow-Origin': '*',
+      'Access-Control-Allow-Headers': 'Content-Type, x-api-key',
+    });
+
+    // Send connection confirmation
+    const streamId = `stream_${Date.now()}_${Math.random().toString(36).slice(2, 11)}`;
+    res.write(`data: ${JSON.stringify({
+      type: 'stream-connected',
+      streamId: streamId,
+      sessionId: sessionId
+    })}\n\n`);
+
+    // Get session and detect language (same as WebSocket)
+    const sessionInfo = await getOrCreateSession(sessionId);
+    const detectedLanguage = userMessage.match(/[áéíóúýþæðöÁÉÍÓÚÝÞÆÐÖ]/i) ? "is" : "en";
+    
+    // Session management (same as WebSocket)
+    if (!sessions.has(sessionId)) {
+      sessions.set(sessionId, {
+        messages: [],
+        createdAt: new Date(),
+      });
+    }
+    const session = sessions.get(sessionId);
+
+    session.messages.push({
+      role: "user",
+      content: userMessage,
+    });
+
+    // Prepare messages for OpenAI (same as WebSocket)
+    const messages = [
+      {
+        role: "system",
+        content: SYSTEM_PROMPT,
+      },
+      ...session.messages.slice(-10),
+    ];
+
+    // Create streaming completion (SAME as WebSocket!)
+    const stream = await openai.chat.completions.create({
+      model: "gpt-4o",
+      messages: messages,
+      temperature: 0.7,
+      max_tokens: 500,
+      stream: true
+    });
+
+    let fullResponse = '';
+    let chunkNumber = 0;
+
+    // Stream the response via SSE (instead of WebSocket)
+    for await (const chunk of stream) {
+      const content = chunk.choices[0]?.delta?.content || '';
+      
+      if (content) {
+        fullResponse += content;
+        chunkNumber++;
+        
+        // Send chunk via SSE (same data as WebSocket)
+        res.write(`data: ${JSON.stringify({
+          type: 'stream-chunk',
+          streamId: streamId,
+          sessionId: sessionId,
+          content: content,
+          chunkNumber: chunkNumber
+        })}\n\n`);
+      }
+    }
+
+    // Add assistant response to session
+    session.messages.push({
+      role: "assistant",
+      content: fullResponse,
+    });
+
+    // Send completion signal (same as WebSocket)
+    res.write(`data: ${JSON.stringify({
+      type: 'stream-complete',
+      streamId: streamId,
+      sessionId: sessionId,
+      completeContent: fullResponse
+    })}\n\n`);
+
+    // End the stream
+    res.write(`data: [DONE]\n\n`);
+    res.end();
+
+    // Fire-and-forget analytics (same as WebSocket)
+    setImmediate(async () => {
+      try {
+        const detectedTopic = detectTopic(userMessage);
+        await broadcastConversation(
+          userMessage,
+          fullResponse,
+          detectedLanguage,
+          detectedTopic,
+          "sse_streaming",
+          sessionId,
+          "active"
+        );
+        console.log('📊 SSE analytics sent');
+      } catch (error) {
+        console.error('❌ Error in SSE analytics:', error);
+      }
+    });
+
+    const totalTime = Date.now() - startTime;
+    console.log(`⏱️ SSE Stream completed in: ${totalTime}ms`);
+
+  } catch (error) {
+    console.error('❌ SSE Stream error:', error);
+    
+    // Send error via SSE
+    res.write(`data: ${JSON.stringify({
+      type: 'stream-error',
+      error: error.message
+    })}\n\n`);
+    
+    res.end();
+  }
+});
 
 // Main chat endpoint - OPTIMIZED FOR SPEED and handles both request formats
 app.post("/chat", async (req, res) => {
@@ -309,7 +642,7 @@ app.post("/chat", async (req, res) => {
     // OPTIMIZATION 1: Start session retrieval immediately
     const sessionPromise = getOrCreateSession(sessionId);
 
-    // Simple language detection (same as ELKO)
+    // Simple language detection (same as your existing system)
     const detectedLanguage = userMessage.match(/[áéíóúýþæðöÁÉÍÓÚÝÞÆÐÖ]/i) ? "is" : "en";
     console.log("🌐 Language detected:", detectedLanguage);
 
@@ -369,16 +702,8 @@ app.post("/chat", async (req, res) => {
       content: response,
     });
 
-    // Topic detection (same as ELKO)
-    const detectedTopic = /\b(job|work|employment|störf|vinna)\b/i.test(userMessage)
-      ? "employment"
-      : /\b(service|þjónusta|símsvörun|tölvupóstur)\b/i.test(userMessage)
-        ? "services"
-        : /\b(price|verð|cost|kostnaður)\b/i.test(userMessage)
-          ? "pricing"
-          : /\b(contact|tengiliður|information|upplýsingar)\b/i.test(userMessage)
-            ? "contact"
-            : "general";
+    // Topic detection (same as your existing system)
+    const detectedTopic = detectTopic(userMessage);
 
     // OPTIMIZATION 3: Cache the response  
     const responseData = {
@@ -513,7 +838,7 @@ app.post('/feedback', verifyApiKey, async (req, res) => {
   }
 });
 
-// PERFORMANCE OPTIMIZATION: Cleanup cache periodically (same as ELKO)
+// PERFORMANCE OPTIMIZATION: Cleanup cache periodically (same as your existing system)
 setInterval(() => {
   const oneHourAgo = Date.now() - 3600000;
   for (const [key, value] of responseCache.entries()) {
@@ -523,10 +848,11 @@ setInterval(() => {
   }
 }, 3600000); // Clean every hour
 
-// Start server (same as your working chatbots)
-const server = app.listen(PORT, () => {
-  console.log(`\n🚀 Svörum strax Backend Started`);
+// Start server with WebSocket support
+server.listen(PORT, () => {
+  console.log(`\n🌊 Svörum strax Backend Started`);
   console.log(`📍 Port: ${PORT}`);
+  console.log(`🔌 WebSocket server ready for streaming`);
   console.log(`✅ Ready for connections\n`);
   
   // Performance features loaded
@@ -534,7 +860,9 @@ const server = app.listen(PORT, () => {
   console.log(`   - Response caching (1 hour TTL)`);
   console.log(`   - Fire-and-forget analytics`);
   console.log(`   - Performance logging`);
-  console.log(`   - Cache cleanup intervals\n`);
+  console.log(`   - Cache cleanup intervals`);
+  console.log(`   - WebSocket streaming support`);
+  console.log(`   - SSE streaming support\n`);
 });
 
 // Graceful shutdown (same as your working chatbots)
