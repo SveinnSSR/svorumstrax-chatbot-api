@@ -8,16 +8,22 @@ import Pusher from "pusher";
 import { WebSocketServer } from 'ws';
 import { createServer } from 'http';
 
-// FIXED: Import analytics modules (removed ../ paths)
+// Import analytics modules
 import { connectToDatabase } from "./database.js";
 import { getOrCreateSession } from "./sessionManager.js";
 import { processMessagePair } from "./messageProcessor.js";
+
+// Import the new prompt system
+import { getSystemPrompt } from "./prompts/svorumstrax-prompt.js";
+
+// NEW: Import file processor
+import { processFiles } from './utils/fileProcessor.js';
 
 // Configuration
 const PORT = process.env.PORT || 8080;
 const API_KEY = process.env.API_KEY || "svorum2025_sk3j8k4j5k6j7k8j9k0j1k2";
 
-// Initialize Express (same as your working chatbots)
+// Initialize Express
 const app = express();
 app.set("trust proxy", 1);
 
@@ -29,7 +35,7 @@ const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
 });
 
-// Initialize Pusher (same as your working chatbots)
+// Initialize Pusher
 const pusher = new Pusher({
   appId: process.env.PUSHER_APP_ID,
   key: process.env.PUSHER_KEY,
@@ -51,7 +57,9 @@ wss.on('connection', (ws, req) => {
       console.log('📨 WebSocket message received:', {
         type: data.type,
         sessionId: data.sessionId,
-        hasMessage: !!data.message
+        hasMessage: !!data.message,
+        hasImages: !!data.images?.length,
+        hasFiles: !!data.files?.length
       });
       
       if (data.type === 'chat' && data.message) {
@@ -72,15 +80,23 @@ wss.on('connection', (ws, req) => {
 
   ws.on('error', (error) => {
     console.error('❌ WebSocket error:', error);
-  });
+  }); 
 });
 
-// Streaming chat handler
+// Streaming chat handler - WITH IMAGE AND FILE SUPPORT
 async function handleStreamingChat(ws, data) {
-  const { message: userMessage, sessionId } = data;
+  const { message: userMessage, sessionId, images, files } = data;
   const streamId = `stream_${Date.now()}_${Math.random().toString(36).slice(2, 11)}`;
   
   try {
+    console.log('📨 WebSocket streaming chat:', {
+      sessionId,
+      hasImages: !!images?.length,
+      hasFiles: !!files?.length,
+      imageCount: images?.length || 0,
+      fileCount: files?.length || 0
+    });
+
     // Send connection confirmation
     ws.send(JSON.stringify({
       type: 'stream-connected',
@@ -88,9 +104,11 @@ async function handleStreamingChat(ws, data) {
       sessionId: sessionId
     }));
 
-    // Get session and detect language
-    const sessionInfo = await getOrCreateSession(sessionId);
+    // Detect language
     const detectedLanguage = userMessage.match(/[áéíóúýþæðöÁÉÍÓÚÝÞÆÐÖ]/i) ? "is" : "en";
+    
+    // Get session and conversation history
+    const sessionInfo = await getOrCreateSession(sessionId);
     
     // Get session for conversation history
     if (!sessions.has(sessionId)) {
@@ -101,27 +119,95 @@ async function handleStreamingChat(ws, data) {
     }
     const session = sessions.get(sessionId);
 
+    // NEW: Extract text from files if present
+    let fileContext = '';
+    if (files && files.length > 0) {
+      console.log(`📄 WebSocket: Processing ${files.length} files...`);
+      fileContext = await processFiles(files);
+      console.log(`✅ WebSocket: File text extracted: ${fileContext.length} chars`);
+    }
+
     // Add user message to session
     session.messages.push({
       role: "user",
       content: userMessage,
     });
 
-    // Prepare messages for OpenAI
+    // Get dynamic system prompt based on language
+    const systemPrompt = getSystemPrompt(detectedLanguage);
+
+    // Build messages array with file context if present
     const messages = [
       {
         role: "system",
-        content: SYSTEM_PROMPT,
+        content: systemPrompt,
       },
       ...session.messages.slice(-10), // Keep last 10 messages
     ];
+
+    // NEW: Build the current user message content properly with images and files
+    let finalUserMessage;
+    
+    if (fileContext && images && images.length > 0) {
+      // BOTH files and images
+      const contentParts = [
+        {
+          type: 'text',
+          text: `${userMessage || 'Vinsamlegast greindu þessi gögn.'}\n\nDOCUMENT CONTENT:\n${fileContext.slice(0, 8000)}`
+        }
+      ];
+      
+      // Add images
+      for (const image of images) {
+        contentParts.push({
+          type: 'image_url',
+          image_url: {
+            url: `data:${image.mimeType};base64,${image.data}`,
+            detail: 'high'
+          }
+        });
+      }
+      
+      // Replace last message with multipart content
+      messages[messages.length - 1] = { role: "user", content: contentParts };
+      console.log('🖼️ WebSocket: Adding images and files to prompt');
+      
+    } else if (fileContext) {
+      // ONLY files
+      messages[messages.length - 1] = {
+        role: "user",
+        content: `${userMessage || 'Vinsamlegast greindu þetta skjal og gefðu álit.'}\n\nDOCUMENT CONTENT:\n${fileContext.slice(0, 8000)}`
+      };
+      
+    } else if (images && images.length > 0) {
+      // ONLY images
+      const contentParts = [
+        {
+          type: 'text',
+          text: userMessage || 'Hvað er þetta á myndinni?'
+        }
+      ];
+      
+      for (const image of images) {
+        contentParts.push({
+          type: 'image_url',
+          image_url: {
+            url: `data:${image.mimeType};base64,${image.data}`,
+            detail: 'high'
+          }
+        });
+      }
+      
+      messages[messages.length - 1] = { role: "user", content: contentParts };
+      console.log('🖼️ WebSocket: Adding images to prompt');
+    }
 
     // Create streaming completion
     const stream = await openai.chat.completions.create({
       model: "gpt-4o",
       messages: messages,
       temperature: 0.7,
-      max_tokens: 500,
+      max_tokens: 800,
       stream: true
     });
 
@@ -161,12 +247,12 @@ async function handleStreamingChat(ws, data) {
       completeContent: fullResponse
     }));
 
-    // Fire-and-forget analytics (same as your existing system)
+    // Fire-and-forget analytics
     setImmediate(async () => {
       try {
-        const detectedTopic = detectTopic(userMessage);
+        const detectedTopic = detectTopic(userMessage || 'file upload');
         await broadcastConversation(
-          userMessage,
+          userMessage || (files && files.length > 0 ? '📄 [Skjal sent]' : '🖼️ [Mynd send]'),
           fullResponse,
           detectedLanguage,
           detectedTopic,
@@ -191,24 +277,28 @@ async function handleStreamingChat(ws, data) {
   }
 }
 
-// Topic detection for Svörum Strax (same as your existing logic)
+// Topic detection for Svörum Strax
 function detectTopic(message) {
   const msg = message.toLowerCase();
   
-  if (/\b(job|work|employment|störf|vinna)\b/i.test(msg)) {
+  if (/\b(job|work|employment|störf|vinna|barcelona|spánn|spain)\b/i.test(msg)) {
     return "employment";
-  } else if (/\b(service|þjónusta|símsvörun|tölvupóstur)\b/i.test(msg)) {
+  } else if (/\b(service|þjónusta|símsvörun|tölvupóstur|phone|email)\b/i.test(msg)) {
     return "services";
-  } else if (/\b(price|verð|cost|kostnaður)\b/i.test(msg)) {
+  } else if (/\b(price|verð|cost|kostnaður|tilboð|quote)\b/i.test(msg)) {
     return "pricing";
-  } else if (/\b(contact|tengiliður|information|upplýsingar)\b/i.test(msg)) {
+  } else if (/\b(ai|gervigreind|chatbot|automation)\b/i.test(msg)) {
+    return "ai_services";
+  } else if (/\b(contact|tengiliður|information|upplýsingar|samband)\b/i.test(msg)) {
     return "contact";
+  } else if (/\b(bókhald|accounting|reikningur|invoice)\b/i.test(msg)) {
+    return "accounting";
   }
   
   return "general";
 }
 
-// Broadcast conversation function (same pattern as your existing system)
+// Broadcast conversation function
 const broadcastConversation = async (
   userMessage,
   botResponse,
@@ -230,7 +320,7 @@ const broadcastConversation = async (
       language: language,
       topic: topic,
       type: type,
-      clientId: "svorum-strax", // Different client ID
+      clientId: "svorum-strax",
       status: status,
     });
 
@@ -263,7 +353,7 @@ const broadcastConversation = async (
         topic: topic,
       };
 
-      // Pusher broadcast (same as your working chatbots)
+      // Pusher broadcast
       await pusher.trigger(
         "svorum-strax-chat-channel",
         "conversation-update",
@@ -286,13 +376,14 @@ const broadcastConversation = async (
   }
 };
 
-// CORS (Updated to include your frontend domain)
+// CORS
 const corsOptions = {
   origin: [
     "http://localhost:3000",
     "http://localhost:8080", 
     "https://svorumstrax-website.vercel.app",
     "https://svorumstrax.is",
+    "https://www.svorumstrax.is",
     "https://hysing.svorumstrax.is",
     // Add any other Svörum Strax domains here
   ],
@@ -303,12 +394,17 @@ const corsOptions = {
 
 // Middleware
 app.use(cors(corsOptions));
-app.use(express.json());
 
-// Simple session storage (same as your working chatbots)
+// NEW: Increase body size limit for images (10MB limit)
+app.use(express.json({ limit: '10mb' }));
+app.use(express.urlencoded({ limit: '10mb', extended: true }));
+
+console.log('📦 Body parser configured with 10MB limit for image/file uploads');
+
+// Simple session storage
 const sessions = new Map();
 
-// API Key verification (same as your working chatbots)
+// API Key verification
 const verifyApiKey = (req, res, next) => {
   const apiKey = req.header("x-api-key");
 
@@ -324,11 +420,11 @@ app.get("/", (_req, res) => {
     status: "OK",
     service: "Svörum strax AI Backend",
     timestamp: new Date().toISOString(),
-    features: ["HTTP API", "WebSocket Streaming", "SSE Streaming"]
+    features: ["HTTP API", "WebSocket Streaming", "SSE Streaming", "Dynamic Prompts", "Image Analysis", "File Processing", "Voice Transcription", "Text-to-Speech"]
   });
 });
 
-// MongoDB test endpoint (same as your working chatbots)
+// MongoDB test endpoint
 app.get("/mongo-test", async (_req, res) => {
   try {
     console.log("MongoDB test endpoint accessed");
@@ -354,134 +450,181 @@ app.get("/mongo-test", async (_req, res) => {
   }
 });
 
-// System prompt (your existing Svörum Strax prompt)
-const SYSTEM_PROMPT = `You are a helpful AI assistant for Svörum strax, an Icelandic customer service outsourcing company based in Barcelona, Spain. You should be friendly, professional, and knowledgeable about all aspects of the company.
-
-COMPANY INFORMATION:
-- Name: Svörum strax
-- Location: Barcelona, Spain
-- Founded: 2019
-- Employees: 35+ Icelandic specialists
-- Services 100+ Icelandic companies
-- Owner: El MUNDO BUENO DE ISLANDIA, SOCIEDAD LIMITADA
-
-SERVICES:
-1. Phone Answering (Símsvörun):
-   - General receptionist services
-   - Specialized customer service with fully trained staff
-   - Answer in company's name, take messages, forward calls
-
-2. Email Service (Tölvupóstþjónusta):
-   - Professional email responses
-   - Categorize and prioritize inquiries
-   - Forward complex matters to appropriate departments
-
-3. AI Chat Service:
-   - 24/7 availability
-   - Learns from every conversation
-   - Provides instant information
-   - Escalates complex issues to human specialists
-
-4. AI Voice Service:
-   - Advanced voice recognition
-   - Natural voice responses in Icelandic and 100+ languages
-   - Emotion detection and adaptive conversations
-
-5. Business Analytics (Viðskiptagreining):
-   - AI analyzes all interactions
-   - Identifies patterns and sales opportunities
-   - Demand forecasting
-   - Operational insights
-
-6. Outbound Calling (Úthringiþjónusta):
-   - Experienced B2B and B2C sales teams
-   - Modern CRM systems
-   - Performance tracking
-
-7. Staff Leasing (Stöðugildi til leigu):
-   - Dedicated employees without administrative overhead
-   - Fully trained staff working exclusively for client
-
-8. Custom Solutions:
-   - Tailored to client's environment and needs
-   - Process design and technology implementation
-
-KEY BENEFITS:
-- Up to 40% more cost-effective than similar services in Iceland
-- Smart integration of human expertise and AI technology
-- Measurable results: 500,000+ calls and emails per year
-- Real-time business insights through AI analysis
-- Setup within 15-30 days
-
-WORKING AT SVÖRUM STRAX:
-For Icelanders interested in working in Barcelona:
-- Always looking for dynamic individuals for remote work and office positions
-- Good income opportunities (NIE Spanish ID required for remote work)
-- Flexible working hours - both day and evening shifts
-- Help with accommodation, Spanish ID, and relocation
-- Great opportunity to experience new culture and learn Spanish
-- One of the largest Icelandic workplaces in Spain
-
-Job Requirements:
-- Experience in phone service (preferred)
-- Sales experience (preferred)
-- Good Icelandic skills in writing and speaking
-- Positive attitude and service mindset
-- Good communication skills
-- Resourcefulness
-
-Benefits:
-- Fixed salary plus performance bonuses
-- Living in one of Europe's most exciting cities
-- Sunny weather and Mediterranean lifestyle
-- Lower cost of living
-- International work environment
-- Career development opportunities
-
-To apply: Send CV to svorumstrax@svorumstrax.is
-
-PHILOSOPHY:
-"We believe competitive advantage comes from employee satisfaction. We help Icelandic companies grow by improving their service without increasing their staff count."
-
-When answering questions:
-- Be helpful and informative
-- Emphasize both AI and human services equally
-- Highlight cost savings and efficiency
-- Encourage interested job seekers
-- Provide contact information when relevant
-- Use a warm, professional tone
-- Answer in the same language as the question (Icelandic or English)`;
-
-// PERFORMANCE OPTIMIZATION: Response cache (same as your existing system)
+// Response cache
 const responseCache = new Map();
 
-// SSE Streaming endpoint (Vercel compatible!) - ADD BEFORE your existing /chat endpoint
+// ============================================================================
+// VOICE TRANSCRIPTION ENDPOINT
+// ============================================================================
+app.post('/transcribe-audio', verifyApiKey, async (req, res) => {
+  const startTime = Date.now();
+
+  try {
+    console.log('🎤 Voice transcription request received');
+
+    const { audio, mimeType, language } = req.body;
+
+    if (!audio) {
+      console.error('❌ No audio data provided');
+      return res.status(400).json({ error: 'Audio data is required' });
+    }
+
+    console.log('📦 Converting base64 audio to buffer...');
+    const audioBuffer = Buffer.from(audio, 'base64');
+    const audioSizeMB = (audioBuffer.length / (1024 * 1024)).toFixed(2);
+    console.log(`📊 Audio size: ${audioSizeMB}MB`);
+
+    const getExtension = (mime) => {
+      if (!mime) return 'webm';
+      if (mime.includes('webm')) return 'webm';
+      if (mime.includes('mp3')) return 'mp3';
+      if (mime.includes('wav')) return 'wav';
+      if (mime.includes('m4a')) return 'm4a';
+      if (mime.includes('ogg')) return 'ogg';
+      return 'webm';
+    };
+
+    const extension = getExtension(mimeType);
+    console.log(`🎵 Audio format: ${extension} (${mimeType || 'audio/webm'})`);
+
+    // Create proper File object
+    const audioFile = new File(
+      [audioBuffer],
+      `audio.${extension}`,
+      { type: mimeType || 'audio/webm' }
+    );
+
+    console.log('🚀 Sending audio to OpenAI Transcription API...');
+    console.log(`⚙️ Settings: whisper-1, language: ${language || 'AUTO'}`);
+
+    const transcriptionArgs = {
+      file: audioFile,
+      model: 'whisper-1',
+      ...(language ? { language } : {}),
+    };
+
+    const transcription = await openai.audio.transcriptions.create(transcriptionArgs);
+
+    const transcribedText = transcription.text || transcription;
+
+    const totalTime = Date.now() - startTime;
+    console.log(`✅ Transcription complete in ${totalTime}ms`);
+    console.log(`📝 Text (${transcribedText.length} chars): "${transcribedText.substring(0, 100)}..."`);
+    
+    res.json({
+      success: true,
+      text: transcribedText,
+      duration: totalTime,
+      audioSize: audioSizeMB
+    });
+
+  } catch (error) {
+    console.error('❌ Voice transcription error:', error);
+    console.error('Error details:', error.message);
+
+    const totalTime = Date.now() - startTime;
+    console.log(`⏱️ Error after: ${totalTime}ms`);
+
+    res.status(500).json({
+      success: false,
+      error: 'Transcription failed',
+      message: error.message
+    });
+  }
+});
+
+// ============================================================================
+// TEXT-TO-SPEECH ENDPOINT
+// ============================================================================
+app.post('/text-to-speech', verifyApiKey, async (req, res) => {
+  const startTime = Date.now();
+
+  try {
+    console.log('🔊 Text-to-speech request received');
+
+    const { text, voice = 'nova', language } = req.body;
+
+    if (!text) {
+      console.error('❌ No text provided');
+      return res.status(400).json({ error: 'Text is required' });
+    }
+
+    console.log(`🗣️ Generating speech: "${text.substring(0, 70)}..." (voice: ${voice})`);
+
+    const mp3 = await openai.audio.speech.create({
+      model: 'tts-1-hd',
+      voice,
+      input: text,
+      speed: 1.0
+    });
+    
+    // Convert response to buffer
+    const buffer = Buffer.from(await mp3.arrayBuffer());
+
+    const totalTime = Date.now() - startTime;
+    console.log(`✅ Speech generated in ${totalTime}ms (${(buffer.length / 1024).toFixed(1)}KB)`);
+    
+    // Return audio as base64
+    res.json({
+      success: true,
+      audio: buffer.toString('base64'),
+      mimeType: 'audio/mpeg',
+      duration: totalTime,
+      size: buffer.length
+    });
+
+  } catch (error) {
+    console.error('❌ TTS error:', error);
+    console.error('Error details:', error.message);
+
+    const totalTime = Date.now() - startTime;
+    console.log(`⏱️ Error after: ${totalTime}ms`);
+
+    res.status(500).json({
+      success: false,
+      error: 'TTS failed',
+      message: error.message
+    });
+  }
+});
+
+console.log('🎤 Voice endpoints initialized:');
+console.log('   - /transcribe-audio (Whisper)');
+console.log('   - /text-to-speech (TTS)');
+
+// SSE Streaming endpoint - WITH IMAGE AND FILE SUPPORT
 app.post("/chat-stream", verifyApiKey, async (req, res) => {
   const startTime = Date.now();
 
   try {
-    // Handle both old format (messages, threadId) and new format (message, sessionId)
-    let userMessage, sessionId;
+    let userMessage, sessionId, language;
     
     if (req.body.messages && Array.isArray(req.body.messages)) {
       // OLD FORMAT: { messages: [...], threadId: "..." }
       const lastMessage = req.body.messages[req.body.messages.length - 1];
       userMessage = lastMessage?.content || "";
       sessionId = req.body.threadId || `session_${Date.now()}`;
+      language = req.body.language;
       console.log("📥 Using OLD request format");
     } else {
       // NEW FORMAT: { message: "...", sessionId: "..." }
       userMessage = req.body.message;
       sessionId = req.body.sessionId || `session_${Date.now()}`;
+      language = req.body.language;
       console.log("📥 Using NEW request format");
     }
 
-    if (!userMessage) {
-      return res.status(400).json({ error: 'Message is required' });
+    // NEW: Accept images and files in request
+    const { images, files } = req.body;
+
+    if (!userMessage && (!images || images.length === 0) && (!files || files.length === 0)) {
+      return res.status(400).json({ error: 'Message, images, or files required' });
     }
 
     console.log("📡 SSE Stream Request:", userMessage);
     console.log("🔑 Session:", sessionId);
+    console.log("🖼️ Images:", images?.length || 0);
+    console.log("📄 Files:", files?.length || 0);
 
     // Set up Server-Sent Events headers
     res.writeHead(200, {
@@ -500,11 +643,11 @@ app.post("/chat-stream", verifyApiKey, async (req, res) => {
       sessionId: sessionId
     })}\n\n`);
 
-    // Get session and detect language (same as WebSocket)
+    // Get session and detect language
     const sessionInfo = await getOrCreateSession(sessionId);
-    const detectedLanguage = userMessage.match(/[áéíóúýþæðöÁÉÍÓÚÝÞÆÐÖ]/i) ? "is" : "en";
+    const detectedLanguage = language || (userMessage.match(/[áéíóúýþæðöÁÉÍÓÚÝÞÆÐÖ]/i) ? "is" : "en");
     
-    // Session management (same as WebSocket)
+    // Session management
     if (!sessions.has(sessionId)) {
       sessions.set(sessionId, {
         messages: [],
@@ -513,33 +656,99 @@ app.post("/chat-stream", verifyApiKey, async (req, res) => {
     }
     const session = sessions.get(sessionId);
 
+    // NEW: Extract text from files
+    let fileContext = '';
+    if (files && files.length > 0) {
+      console.log(`📄 SSE: Processing ${files.length} files...`);
+      fileContext = await processFiles(files);
+      console.log(`✅ SSE: File text extracted: ${fileContext.length} chars`);
+    }
+
     session.messages.push({
       role: "user",
-      content: userMessage,
+      content: userMessage || (files && files.length > 0 ? '📄 [Skjal sent]' : '🖼️ [Mynd send]'),
     });
 
-    // Prepare messages for OpenAI (same as WebSocket)
+    // Get dynamic system prompt
+    const systemPrompt = getSystemPrompt(detectedLanguage);
+
+    // Prepare messages
     const messages = [
       {
         role: "system",
-        content: SYSTEM_PROMPT,
+        content: systemPrompt,
       },
       ...session.messages.slice(-10),
     ];
 
-    // Create streaming completion (SAME as WebSocket!)
+    // NEW: Build the current user message content properly
+    let finalUserMessage;
+    
+    if (fileContext && images && images.length > 0) {
+      // BOTH files and images
+      const contentParts = [
+        {
+          type: 'text',
+          text: `${userMessage || 'Vinsamlegast greindu þessi gögn.'}\n\nDOCUMENT CONTENT:\n${fileContext.slice(0, 8000)}`
+        }
+      ];
+      
+      for (const image of images) {
+        contentParts.push({
+          type: 'image_url',
+          image_url: {
+            url: `data:${image.mimeType};base64,${image.data}`,
+            detail: 'high'
+          }
+        });
+      }
+      
+      messages[messages.length - 1] = { role: "user", content: contentParts };
+      console.log('🖼️ SSE: Adding images and files to prompt');
+      
+    } else if (fileContext) {
+      // ONLY files
+      messages[messages.length - 1] = {
+        role: "user",
+        content: `${userMessage || 'Vinsamlegast greindu þetta skjal og gefðu álit.'}\n\nDOCUMENT CONTENT:\n${fileContext.slice(0, 8000)}`
+      };
+      
+    } else if (images && images.length > 0) {
+      // ONLY images
+      const contentParts = [
+        {
+          type: 'text',
+          text: userMessage || 'Hvað er þetta á myndinni?'
+        }
+      ];
+      
+      for (const image of images) {
+        contentParts.push({
+          type: 'image_url',
+          image_url: {
+            url: `data:${image.mimeType};base64,${image.data}`,
+            detail: 'high'
+          }
+        });
+      }
+      
+      messages[messages.length - 1] = { role: "user", content: contentParts };
+      console.log('🖼️ SSE: Adding images to prompt');
+    }
+
+    // Create streaming completion
     const stream = await openai.chat.completions.create({
       model: "gpt-4o",
       messages: messages,
       temperature: 0.7,
-      max_tokens: 500,
+      max_tokens: 800,
       stream: true
     });
 
     let fullResponse = '';
     let chunkNumber = 0;
 
-    // Stream the response via SSE (instead of WebSocket)
+    // Stream the response via SSE
     for await (const chunk of stream) {
       const content = chunk.choices[0]?.delta?.content || '';
       
@@ -564,7 +773,7 @@ app.post("/chat-stream", verifyApiKey, async (req, res) => {
       content: fullResponse,
     });
 
-    // Send completion signal (same as WebSocket)
+    // Send completion signal
     res.write(`data: ${JSON.stringify({
       type: 'stream-complete',
       streamId: streamId,
@@ -576,12 +785,12 @@ app.post("/chat-stream", verifyApiKey, async (req, res) => {
     res.write(`data: [DONE]\n\n`);
     res.end();
 
-    // Fire-and-forget analytics (same as WebSocket)
+    // Fire-and-forget analytics
     setImmediate(async () => {
       try {
-        const detectedTopic = detectTopic(userMessage);
+        const detectedTopic = detectTopic(userMessage || 'file upload');
         await broadcastConversation(
-          userMessage,
+          userMessage || (files && files.length > 0 ? '📄 [Skjal sent]' : '🖼️ [Mynd send]'),
           fullResponse,
           detectedLanguage,
           detectedTopic,
@@ -601,53 +810,58 @@ app.post("/chat-stream", verifyApiKey, async (req, res) => {
   } catch (error) {
     console.error('❌ SSE Stream error:', error);
     
-    // Send error via SSE
-    res.write(`data: ${JSON.stringify({
-      type: 'stream-error',
-      error: error.message
-    })}\n\n`);
-    
-    res.end();
+    try {
+      res.write(`data: ${JSON.stringify({
+        type: 'stream-error',
+        error: error.message
+      })}\n\n`);
+      res.end();
+    } catch (writeError) {
+      console.error('❌ Could not send error response:', writeError);
+    }
   }
 });
 
-// Main chat endpoint - OPTIMIZED FOR SPEED and handles both request formats
-app.post("/chat", async (req, res) => {
+// Main chat endpoint - WITH IMAGE AND FILE SUPPORT
+app.post("/chat", verifyApiKey, async (req, res) => {
   const startTime = Date.now();
 
   try {
-    // Handle both old format (messages, threadId) and new format (message, sessionId)
-    let userMessage, sessionId;
+    let userMessage, sessionId, language;
     
     if (req.body.messages && Array.isArray(req.body.messages)) {
       // OLD FORMAT: { messages: [...], threadId: "..." }
       const lastMessage = req.body.messages[req.body.messages.length - 1];
       userMessage = lastMessage?.content || "";
       sessionId = req.body.threadId || `session_${Date.now()}`;
+      language = req.body.language;
       console.log("📥 Using OLD request format");
     } else {
       // NEW FORMAT: { message: "...", sessionId: "..." }
       userMessage = req.body.message;
       sessionId = req.body.sessionId || `session_${Date.now()}`;
+      language = req.body.language;
       console.log("📥 Using NEW request format");
     }
 
-    if (!userMessage) {
-      return res.status(400).json({ error: 'Message is required' });
+    // NEW: Accept images and files
+    const { images, files } = req.body;
+
+    if (!userMessage && (!images || images.length === 0) && (!files || files.length === 0)) {
+      return res.status(400).json({ error: 'Message, images, or files required' });
     }
 
     console.log("📥 Message:", userMessage);
     console.log("🔑 Session:", sessionId);
+    console.log("🖼️ Images:", images?.length || 0);
+    console.log("📄 Files:", files?.length || 0);
 
-    // OPTIMIZATION 1: Start session retrieval immediately
-    const sessionPromise = getOrCreateSession(sessionId);
-
-    // Simple language detection (same as your existing system)
-    const detectedLanguage = userMessage.match(/[áéíóúýþæðöÁÉÍÓÚÝÞÆÐÖ]/i) ? "is" : "en";
+    // Simple language detection
+    const detectedLanguage = language || (userMessage?.match(/[áéíóúýþæðöÁÉÍÓÚÝÞÆÐÖ]/i) ? "is" : "en");
     console.log("🌐 Language detected:", detectedLanguage);
 
-    // OPTIMIZATION 2: Check response cache early
-    const cacheKey = `${sessionId}:${userMessage.toLowerCase().trim()}:${detectedLanguage}`;
+    // Check cache
+    const cacheKey = `${sessionId}:${userMessage?.toLowerCase().trim()}:${detectedLanguage}:${images?.length || 0}:${files?.length || 0}`;
     const cached = responseCache.get(cacheKey);
 
     if (cached && Date.now() - cached.timestamp < 3600000) {
@@ -656,11 +870,11 @@ app.post("/chat", async (req, res) => {
       return res.json(cached.response);
     }
 
-    // Wait for session info
-    const sessionInfo = await sessionPromise;
+    // Get session
+    const sessionInfo = await getOrCreateSession(sessionId);
     console.log("📊 Using conversation ID:", sessionInfo.conversationId);
 
-    // Session management (same as your working chatbots)
+    // Session management
     if (!sessions.has(sessionId)) {
       sessions.set(sessionId, {
         messages: [],
@@ -669,9 +883,17 @@ app.post("/chat", async (req, res) => {
     }
     const session = sessions.get(sessionId);
 
+    // NEW: Extract text from files
+    let fileContext = '';
+    if (files && files.length > 0) {
+      console.log(`📄 HTTP: Processing ${files.length} files...`);
+      fileContext = await processFiles(files);
+      console.log(`✅ HTTP: File text extracted: ${fileContext.length} chars`);
+    }
+
     session.messages.push({
       role: "user",
-      content: userMessage,
+      content: userMessage || (files && files.length > 0 ? '📄 [Skjal sent]' : '🖼️ [Mynd send]'),
     });
 
     // Keep only last 10 messages
@@ -679,20 +901,51 @@ app.post("/chat", async (req, res) => {
       session.messages = session.messages.slice(-10);
     }
 
-    // OpenAI call (same as your working chatbots)
+    // Get system prompt
+    const systemPrompt = getSystemPrompt(detectedLanguage);
+
+    // Build messages
     const messages = [
       {
         role: "system",
-        content: SYSTEM_PROMPT,
+        content: systemPrompt,
       },
       ...session.messages,
     ];
+
+    // Handle images/files in HTTP mode (non-streaming)
+    if (images && images.length > 0) {
+      // Replace last message with image content
+      const contentParts = [
+        {
+          type: 'text',
+          text: userMessage || 'Hvað er þetta á myndinni?'
+        }
+      ];
+      
+      for (const image of images) {
+        contentParts.push({
+          type: 'image_url',
+          image_url: {
+            url: `data:${image.mimeType};base64,${image.data}`,
+            detail: 'high'
+          }
+        });
+      }
+      
+      messages[messages.length - 1] = { role: "user", content: contentParts };
+    } else if (fileContext) {
+      messages[messages.length - 1] = {
+        role: "user",
+        content: `${userMessage || 'Vinsamlegast greindu þetta skjal.'}\n\nDOCUMENT CONTENT:\n${fileContext.slice(0, 8000)}`
+      };
+    }
 
     const completion = await openai.chat.completions.create({
       model: "gpt-4o",
       messages: messages,
       temperature: 0.7,
-      max_tokens: 500,
+      max_tokens: 800,
     });
 
     const response = completion.choices[0].message.content;
@@ -702,15 +955,15 @@ app.post("/chat", async (req, res) => {
       content: response,
     });
 
-    // Topic detection (same as your existing system)
-    const detectedTopic = detectTopic(userMessage);
+    // Topic detection
+    const detectedTopic = detectTopic(userMessage || 'file upload');
 
-    // OPTIMIZATION 3: Cache the response  
+    // Cache the response  
     const responseData = {
       message: response,
       sessionId: sessionId,
-      threadId: sessionId, // For backward compatibility
-      postgresqlMessageId: null, // Will be updated asynchronously
+      threadId: sessionId,
+      postgresqlMessageId: null,
       language: {
         detected: detectedLanguage,
         isIcelandic: detectedLanguage === "is"
@@ -720,7 +973,7 @@ app.post("/chat", async (req, res) => {
         process.env.NODE_ENV === "development"
           ? {
               topic: detectedTopic,
-              promptLength: SYSTEM_PROMPT.length,
+              promptLength: systemPrompt.length,
             }
           : undefined,
     };
@@ -730,11 +983,11 @@ app.post("/chat", async (req, res) => {
       timestamp: Date.now(),
     });
 
-    // OPTIMIZATION 4: Fire-and-forget broadcasting - DON'T WAIT!
+    // Fire-and-forget broadcasting
     setImmediate(async () => {
       try {
         const broadcastResult = await broadcastConversation(
-          userMessage,
+          userMessage || (files && files.length > 0 ? '📄 [Skjal sent]' : '🖼️ [Mynd send]'),
           response,
           detectedLanguage,
           detectedTopic,
@@ -774,7 +1027,7 @@ app.post("/chat", async (req, res) => {
   }
 });
 
-// Feedback endpoint (same as your working chatbots)
+// Feedback endpoint
 app.post('/feedback', verifyApiKey, async (req, res) => {
   try {
     const { messageId, isPositive, messageContent, timestamp, chatId, language, postgresqlId } = req.body;
@@ -802,7 +1055,7 @@ app.post('/feedback', verifyApiKey, async (req, res) => {
     
     console.log('💾 Feedback saved to MongoDB');
 
-    // Forward to analytics (same as your working chatbots)
+    // Forward to analytics
     try {
       const analyticsResponse = await fetch('https://hysing.svorumstrax.is/api/public-feedback', {
         method: 'POST',
@@ -838,7 +1091,7 @@ app.post('/feedback', verifyApiKey, async (req, res) => {
   }
 });
 
-// PERFORMANCE OPTIMIZATION: Cleanup cache periodically (same as your existing system)
+// Cleanup cache periodically
 setInterval(() => {
   const oneHourAgo = Date.now() - 3600000;
   for (const [key, value] of responseCache.entries()) {
@@ -846,7 +1099,7 @@ setInterval(() => {
       responseCache.delete(key);
     }
   }
-}, 3600000); // Clean every hour
+}, 3600000);
 
 // Start server with WebSocket support
 server.listen(PORT, () => {
@@ -857,15 +1110,20 @@ server.listen(PORT, () => {
   
   // Performance features loaded
   console.log(`📚 Performance Features Loaded:`);
+  console.log(`   - Dynamic system prompts (IS/EN)`);
   console.log(`   - Response caching (1 hour TTL)`);
   console.log(`   - Fire-and-forget analytics`);
   console.log(`   - Performance logging`);
   console.log(`   - Cache cleanup intervals`);
   console.log(`   - WebSocket streaming support`);
-  console.log(`   - SSE streaming support\n`);
+  console.log(`   - SSE streaming support`);
+  console.log(`   - 🖼️ Image analysis (GPT-4o vision)`);
+  console.log(`   - 📄 File processing (PDF, Word, Excel)`);
+  console.log(`   - 🎤 Voice transcription (Whisper API)`);
+  console.log(`   - 🔊 Text-to-speech (TTS)\n`);
 });
 
-// Graceful shutdown (same as your working chatbots)
+// Graceful shutdown
 process.on("SIGTERM", () => {
   server.close(() => {
     console.log("Server closed");
