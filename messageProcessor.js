@@ -104,6 +104,10 @@ export async function processMessagePair(userMessage, botResponse, metadata = {}
       status: metadata.status || 'active'
     });
 
+    // Add device/browser/referer tracking if available
+    if (metadata.userAgent) conversationData.userAgent = metadata.userAgent;
+    if (metadata.referer) conversationData.referer = metadata.referer;
+
     // Log normalized data for debugging
     console.log(`\n✅ Message pair normalized successfully:
       ConversationID: ${conversationData.id}

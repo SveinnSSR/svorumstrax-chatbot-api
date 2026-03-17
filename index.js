@@ -307,6 +307,11 @@ const broadcastConversation = async (
   type = "chat",
   clientSessionId = null,
   status = "active",
+  userCountry = null,
+  userIp = null,
+  messageMetadata = null,
+  userAgent = null,
+  referer = null,
 ) => {
   try {
     if (!userMessage || !botResponse) {
@@ -322,6 +327,8 @@ const broadcastConversation = async (
       type: type,
       clientId: "svorum-strax",
       status: status,
+      userAgent: userAgent,
+      referer: referer,
     });
 
     if (processResult.success) {
@@ -598,7 +605,11 @@ app.post("/chat-stream", verifyApiKey, async (req, res) => {
 
   try {
     let userMessage, sessionId, language;
-    
+    const userAgent = req.headers['user-agent'] || null;
+    const referer = req.body?.pageUrl || req.headers['referer'] || null;
+    const userCountry = req.headers['cf-ipcountry'] || null;
+    const userIp = req.headers['x-forwarded-for']?.split(',')[0]?.trim() || null;
+
     if (req.body.messages && Array.isArray(req.body.messages)) {
       // OLD FORMAT: { messages: [...], threadId: "..." }
       const lastMessage = req.body.messages[req.body.messages.length - 1];
@@ -796,7 +807,12 @@ app.post("/chat-stream", verifyApiKey, async (req, res) => {
           detectedTopic,
           "sse_streaming",
           sessionId,
-          "active"
+          "active",
+          userCountry,
+          userIp,
+          null,
+          userAgent,
+          referer
         );
         console.log('📊 SSE analytics sent');
       } catch (error) {
@@ -828,7 +844,11 @@ app.post("/chat", verifyApiKey, async (req, res) => {
 
   try {
     let userMessage, sessionId, language;
-    
+    const chatUserAgent = req.headers['user-agent'] || null;
+    const chatReferer = req.body?.pageUrl || req.headers['referer'] || null;
+    const chatUserCountry = req.headers['cf-ipcountry'] || null;
+    const chatUserIp = req.headers['x-forwarded-for']?.split(',')[0]?.trim() || null;
+
     if (req.body.messages && Array.isArray(req.body.messages)) {
       // OLD FORMAT: { messages: [...], threadId: "..." }
       const lastMessage = req.body.messages[req.body.messages.length - 1];
@@ -994,6 +1014,11 @@ app.post("/chat", verifyApiKey, async (req, res) => {
           "chat",
           sessionId,
           "active",
+          chatUserCountry,
+          chatUserIp,
+          null,
+          chatUserAgent,
+          chatReferer
         );
 
         // Update cache with PostgreSQL ID if available
