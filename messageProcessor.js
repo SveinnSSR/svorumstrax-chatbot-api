@@ -235,15 +235,31 @@ async function sendConversationToAnalytics(conversationData) {
       Topic: ${conversationData.topic || 'general'}`
     );
     
-    // Make HTTP request to analytics API
-    const analyticsResponse = await fetch('https://hysing.svorumstrax.is/api/conversations', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-api-key': process.env.ANALYTICS_API_KEY || 'sky-lagoon-secret-2024'
-      },
-      body: JSON.stringify(conversationData)
-    });
+    // Make HTTP request to analytics API (with retry for transient failures)
+    let analyticsResponse;
+    const maxRetries = 3;
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      try {
+        analyticsResponse = await fetch('https://hysing.svorumstrax.is/api/conversations', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'x-api-key': process.env.ANALYTICS_API_KEY || 'sky-lagoon-secret-2024'
+          },
+          body: JSON.stringify(conversationData),
+          signal: AbortSignal.timeout(10000), // 10s timeout per attempt
+        });
+        break; // Success - exit retry loop
+      } catch (fetchError) {
+        console.warn(`⚠️ Analytics send attempt ${attempt}/${maxRetries} failed:`, fetchError.message);
+        if (attempt === maxRetries) {
+          console.error(`❌ All ${maxRetries} analytics send attempts failed`);
+          return { success: false, postgresqlId: null };
+        }
+        // Wait before retry: 1s, 2s, 4s
+        await new Promise(resolve => setTimeout(resolve, 1000 * Math.pow(2, attempt - 1)));
+      }
+    }
     
     // Process the response from analytics system
     if (analyticsResponse.ok) {
