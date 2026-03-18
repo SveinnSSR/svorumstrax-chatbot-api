@@ -421,6 +421,30 @@ const verifyApiKey = (req, res, next) => {
   next();
 };
 
+// Widget events proxy — forwards to analytics system (avoids CSP blocks)
+app.post('/widget-events', verifyApiKey, async (req, res) => {
+  try {
+    const analyticsUrl = 'https://hysing.svorumstrax.is/api/widget-events';
+    const analyticsKey = process.env.ANALYTICS_API_KEY || 'sky-lagoon-secret-2024';
+
+    const body = Array.isArray(req.body)
+      ? req.body.map(e => ({ ...e, _geo: { country: req.headers['x-vercel-ip-country'], region: req.headers['x-vercel-ip-country-region'], city: req.headers['x-vercel-ip-city'] } }))
+      : { ...req.body, _geo: { country: req.headers['x-vercel-ip-country'], region: req.headers['x-vercel-ip-country-region'], city: req.headers['x-vercel-ip-city'] } };
+
+    const response = await fetch(analyticsUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-api-key': analyticsKey },
+      body: JSON.stringify(body),
+    });
+
+    const data = await response.json();
+    res.status(response.status).json(data);
+  } catch (error) {
+    console.error('Widget events proxy error:', error.message);
+    res.status(500).json({ error: 'Failed to forward widget events' });
+  }
+});
+
 // Health check
 app.get("/", (_req, res) => {
   res.json({
