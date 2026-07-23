@@ -30,6 +30,14 @@ app.set("trust proxy", 1);
 // Create HTTP server for WebSocket support
 const server = createServer(app);
 
+// Keep the serverless function alive until fire-and-forget background work (conversation logging via
+// the Assistant ingest) finishes. On Vercel the function is frozen once the handler returns, so work
+// started after res.end() can be suspended before it lands. flushBackground awaits it (capped).
+async function flushBackground(work, capMs = 4000) {
+  try { await Promise.race([work, new Promise((resolve) => setTimeout(resolve, capMs))]); }
+  catch { /* background logging errors are non-fatal */ }
+}
+
 // Initialize OpenAI
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
@@ -816,12 +824,10 @@ app.post("/chat-stream", verifyApiKey, async (req, res) => {
       completeContent: fullResponse
     })}\n\n`);
 
-    // End the stream
-    res.write(`data: [DONE]\n\n`);
-    res.end();
-
-    // Fire-and-forget analytics
-    setImmediate(async () => {
+    // Persist the conversation BEFORE closing the stream. On Vercel the function is frozen once
+    // res.end() fires, so work started after it can be suspended before the ingest POST lands. The
+    // answer is already fully streamed above, so awaiting here (capped) only delays [DONE] ~0.5-1s.
+    await flushBackground((async () => {
       try {
         const detectedTopic = detectTopic(userMessage || 'file upload');
         await broadcastConversation(
@@ -842,7 +848,11 @@ app.post("/chat-stream", verifyApiKey, async (req, res) => {
       } catch (error) {
         console.error('❌ Error in SSE analytics:', error);
       }
-    });
+    })());
+
+    // End the stream (after logging has landed)
+    res.write(`data: [DONE]\n\n`);
+    res.end();
 
     const totalTime = Date.now() - startTime;
     console.log(`⏱️ SSE Stream completed in: ${totalTime}ms`);

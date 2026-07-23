@@ -116,19 +116,42 @@ export async function processMessagePair(userMessage, botResponse, metadata = {}
       Topic: ${metadata.topic || 'general'}`
     );
 
-    // Save conversation to MongoDB for persistence
-    await saveConversationToMongoDB(conversationData);
+    // Carry visitor country through too (userAgent/referer already set above) so the Assistant's
+    // Chatbot views can show it (the ingest preserves it; normalizeConversation drops it).
+    if (metadata.userCountry && metadata.userCountry !== 'XX') conversationData.geoCountry = metadata.userCountry;
 
-    // Send conversation to analytics system
-    const analyticsResult = await sendConversationToAnalytics(conversationData);
+    // SINGLE clean logging path (migration to the Svörum strax Assistant). POST the conversation to
+    // the Assistant ingest, which normalizes it, tags companyId (from clientId) + source:'webchat',
+    // saves it to the shared Mongo the admin + client portal read, and runs sentiment/summary. This
+    // REPLACES the old dual-write (own saveConversationToMongoDB + hýsing POST). URL + key are
+    // hardcoded fallbacks (public endpoint; Assistant gate default) so a missing env can't break it.
+    // Awaited so the serverless function stays alive until it lands. See docs/chatbot-analytics-migration.md.
+    const ingestUrl = process.env.ASSISTANT_ANALYTICS_URL
+      || 'https://svorumstrax-assistant-11wt.vercel.app/api/conversations';
+    const ingestKey = process.env.ASSISTANT_ANALYTICS_KEY || 'svorum_internal_2025';
+    try {
+      const res = await fetch(ingestUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-api-key': ingestKey,
+          ...(metadata.userCountry ? { 'x-user-ip-country': metadata.userCountry } : {})
+        },
+        body: JSON.stringify(conversationData),
+        signal: AbortSignal.timeout(4000)
+      });
+      if (res.ok) console.log(`📤 Conversation logged to Svörum strax Assistant (${conversationData.id})`);
+      else console.error(`⚠️ Assistant ingest returned ${res.status} — key set: ${ingestKey ? 'yes' : 'NO'}`);
+    } catch (err) {
+      console.error('❌ Assistant ingest failed (conversation not logged):', err.message);
+    }
 
-    // Return success with message IDs and PostgreSQL ID (for feedback)
     return {
       success: true,
       conversationId: sessionInfo.conversationId,
       userMessageId: userMessageId,
       botMessageId: botMessageId,
-      postgresqlId: analyticsResult?.postgresqlId || null
+      postgresqlId: null   // feedback/PostgreSQL id retired with the hýsing migration
     };
   } catch (error) {
     console.error('❌ Error processing message pair:', error);
