@@ -135,7 +135,9 @@ export async function processMessagePair(userMessage, botResponse, metadata = {}
         headers: {
           'Content-Type': 'application/json',
           'x-api-key': ingestKey,
-          ...(metadata.userCountry ? { 'x-user-ip-country': metadata.userCountry } : {})
+          ...(metadata.userCountry ? { 'x-user-ip-country': metadata.userCountry } : {}),
+          // Visitor IP so the Assistant ingest can geo-enrich (city/region/country) like hýsing did.
+          ...(metadata.userIp && metadata.userIp !== 'unknown' ? { 'x-user-ip': metadata.userIp } : {})
         },
         body: JSON.stringify(conversationData),
         signal: AbortSignal.timeout(4000)

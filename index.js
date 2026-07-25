@@ -337,6 +337,8 @@ const broadcastConversation = async (
       status: status,
       userAgent: userAgent,
       referer: referer,
+      userCountry: userCountry,   // → geoCountry
+      userIp: userIp,             // → Assistant ingest geo-enrich (city/region/country)
     });
 
     if (processResult.success) {
