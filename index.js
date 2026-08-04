@@ -3,7 +3,9 @@ dotenv.config();
 
 import express from "express";
 import cors from "cors";
-import OpenAI from "openai";
+// Chat goes through our Azure OpenAI resource (EU/GDPR) via the shared factory; audio
+// (whisper-1 / tts-1-hd) stays OpenAI-direct because Azure has no audio deployment.
+import { openai, audioOpenai, CHAT_MODEL, PROVIDER } from "./openaiClient.js";
 import Pusher from "pusher";
 import { WebSocketServer } from 'ws';
 import { createServer } from 'http';
@@ -38,10 +40,8 @@ async function flushBackground(work, capMs = 4000) {
   catch { /* background logging errors are non-fatal */ }
 }
 
-// Initialize OpenAI
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
-});
+// The OpenAI/Azure clients come from ./openaiClient.js (added 2026-08-04 when chat moved to our
+// Azure OpenAI resource for GDPR). Nothing is constructed here any more.
 
 // Initialize Pusher
 const pusher = new Pusher({
@@ -212,7 +212,7 @@ async function handleStreamingChat(ws, data) {
 
     // Create streaming completion
     const stream = await openai.chat.completions.create({
-      model: "gpt-4o",
+      model: CHAT_MODEL,
       messages: messages,
       temperature: 0.7,
       max_tokens: 800,
@@ -544,7 +544,7 @@ app.post('/transcribe-audio', verifyApiKey, async (req, res) => {
       ...(language ? { language } : {}),
     };
 
-    const transcription = await openai.audio.transcriptions.create(transcriptionArgs);
+    const transcription = await audioOpenai.audio.transcriptions.create(transcriptionArgs);
 
     const transcribedText = transcription.text || transcription;
 
@@ -592,7 +592,7 @@ app.post('/text-to-speech', verifyApiKey, async (req, res) => {
 
     console.log(`🗣️ Generating speech: "${text.substring(0, 70)}..." (voice: ${voice})`);
 
-    const mp3 = await openai.audio.speech.create({
+    const mp3 = await audioOpenai.audio.speech.create({
       model: 'tts-1-hd',
       voice,
       input: text,
@@ -783,7 +783,7 @@ app.post("/chat-stream", verifyApiKey, async (req, res) => {
 
     // Create streaming completion
     const stream = await openai.chat.completions.create({
-      model: "gpt-4o",
+      model: CHAT_MODEL,
       messages: messages,
       temperature: 0.7,
       max_tokens: 800,
@@ -998,7 +998,7 @@ app.post("/chat", verifyApiKey, async (req, res) => {
     }
 
     const completion = await openai.chat.completions.create({
-      model: "gpt-4o",
+      model: CHAT_MODEL,
       messages: messages,
       temperature: 0.7,
       max_tokens: 800,
