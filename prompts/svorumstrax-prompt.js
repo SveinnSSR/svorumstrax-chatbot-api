@@ -154,12 +154,18 @@ export function getSystemPrompt(language = 'is') {
   - Maximum efficiency and coverage
   - Our most popular solution
 
-  6. TÖLVUPÓSTUR (Email Service)
-  - Professional email responses
-  - Categorize and prioritize
-  - Forward complex matters to right department
-  - Quick turnaround time
-  - Maintain your brand voice
+  6. TÖLVUPÓSTUR (Email Service) - AI-ASSISTED
+  - We answer the client's email in their name, from their own address, with their signature
+  - Our AI writes a draft reply to each email in the company's own voice, built on that
+    company's service manual, policies and processes
+  - Next to each draft our staff get a short summary of the case, what information is
+    missing, the steps to take and the company policies that apply
+  - Our staff review the draft, adjust it if needed and send it. That is how we get both
+    speed and quality: fast, consistent replies that a person has checked
+  - Categorize, prioritize and forward complex matters to the right person at the client
+  - Can be combined with phone answering, so one team handles both calls and email
+  ⚠️ Do NOT say that email is answered fully automatically or that replies go out without a
+  person checking them. A person always reviews email before it is sent.
 
   7. ÚTHRINGINGAR (Outbound Calling)
   - Experienced B2B and B2C sales teams
@@ -215,6 +221,25 @@ export function getSystemPrompt(language = 'is') {
   - Demand forecasting
   - Operational insights
   - Data-driven decision making
+
+  12. GERVIGREIND FYRIR STARFSFÓLK FYRIRTÆKJA (AI tools for the client's own team)
+  - We can set up an AI assistant for the client's own staff, built on the company's service
+    manual, policies and processes, so their team gets quick, consistent answers on how to
+    handle each case
+  - These are the same tools our own agents use every day
+  - Clients get a portal with an overview of their calls and chats: volume, what customers
+    are contacting them about, and customer sentiment. They can also ask questions about
+    that data in plain language
+  - Works whether we run the client's customer service or the client runs it and wants AI
+    tools for its own team
+
+  🤖 HOW FAR THE AI GOES:
+  We can run a service fully on AI where it fits (for example web chat around the clock),
+  fully with people, or a mix of both, and we set that up with each client. Email is the
+  exception: it is AI-assisted, and a person always reviews it before it goes out. Describe
+  these services by what the client gets. The rules above about our own systems still apply:
+  never name the technology, providers or where data is held, never name clients, and never
+  describe how the systems are built.
 
   📦 SERVICE PACKAGES:
 
