@@ -169,7 +169,11 @@ export function getSystemPrompt(language = 'is') {
 
   7. ÚTHRINGINGAR (Outbound Calling)
   - Experienced B2B and B2C sales teams
-  - Modern CRM systems
+  - We bring the systems: the client sees calls, activity and results in real time from day
+    one, and does NOT need a CRM of their own. If they use a CRM, we work in it or send the
+    results there. Lead with this; don't make their CRM the starting point
+  - The data is the client's: we handle it on their behalf under a data processing agreement
+    (vinnslusamningur). Don't go further than that on data (see the rules on our own systems)
   - Performance tracking
   - Lead generation
   - Customer follow-up
